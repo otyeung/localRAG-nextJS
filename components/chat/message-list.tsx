@@ -13,6 +13,8 @@ type ChatMessage = UIMessage<{
   createdAt?: string;
 }>;
 
+type ToolPart = Extract<ChatMessage['parts'][number], { type: `tool-${string}` | 'dynamic-tool' }>;
+
 function getTextContent(message: ChatMessage): string {
   return message.parts
     .filter((part): part is Extract<ChatMessage['parts'][number], { type: 'text' }> => part.type === 'text')
@@ -33,6 +35,31 @@ function getSourceParts(message: ChatMessage) {
   );
 }
 
+function getToolParts(message: ChatMessage) {
+  return message.parts.filter((part): part is ToolPart => part.type === 'dynamic-tool' || part.type.startsWith('tool-'));
+}
+
+function humanizeToolName(name: string) {
+  return name.replace(/^tool-/, '').replace(/[_-]+/g, ' ').trim();
+}
+
+function getToolStatusCopy(part: ToolPart) {
+  switch (part.state) {
+    case 'input-streaming':
+    case 'input-available':
+    case 'approval-requested':
+    case 'approval-responded':
+      return { label: 'running', tone: 'info' as const };
+    case 'output-available':
+      return { label: 'completed', tone: 'success' as const };
+    case 'output-error':
+    case 'output-denied':
+      return { label: 'failed', tone: 'danger' as const };
+    default:
+      return null;
+  }
+}
+
 export function MessageList({
   messages,
   onCopy,
@@ -48,6 +75,7 @@ export function MessageList({
         const content = getTextContent(message);
         const reasoningParts = getReasoningParts(message);
         const sources = getSourceParts(message);
+        const toolParts = getToolParts(message);
         const isAssistant = message.role === 'assistant';
         const timestamp = message.metadata?.createdAt
           ? new Date(message.metadata.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -100,6 +128,44 @@ export function MessageList({
             </header>
 
             {content ? <MarkdownMessage content={content} /> : null}
+
+            {toolParts.length > 0 ? (
+              <section className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
+                <p className="mb-3 text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-dim)]">
+                  Tool execution
+                </p>
+                <div className="space-y-2">
+                  {toolParts.map((part) => {
+                    const status = getToolStatusCopy(part);
+                    if (!status) {
+                      return null;
+                    }
+
+                    const toolName =
+                      part.type === 'dynamic-tool' ? humanizeToolName(part.toolName) : humanizeToolName(part.type);
+                    const ariaLabel = `Tool ${toolName} ${status.label}`;
+
+                    return (
+                      <div
+                        key={part.toolCallId}
+                        aria-label={ariaLabel}
+                        className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium capitalize text-[color:var(--text-strong)]">{toolName}</p>
+                            {part.state === 'output-error' && 'errorText' in part && part.errorText ? (
+                              <p className="mt-1 text-xs text-rose-300">{part.errorText}</p>
+                            ) : null}
+                          </div>
+                          <StatusBadge label={status.label} tone={status.tone} pulse={status.label === 'running'} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             {sources.length > 0 ? (
               <section className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">

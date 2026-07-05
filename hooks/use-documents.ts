@@ -29,6 +29,12 @@ export type WorkflowRecord = {
   reconciliationRequired: boolean;
 };
 
+export type ReindexDocumentResult = {
+  workflowExecutionId: string;
+  externalExecutionId: string | null;
+  status: WorkflowRecord['status'];
+};
+
 type DocumentPayload = {
   items: DocumentRecord[];
   total: number;
@@ -111,6 +117,19 @@ export function useDocuments({
     },
   });
 
+  const reindexDocument = useMutation({
+    mutationFn: (id: string) =>
+      requestJson<ReindexDocumentResult>(`/api/documents/${id}`, {
+        method: 'PATCH',
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['documents'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+      ]);
+    },
+  });
+
   const workflowsByDocumentId = new Map(
     (workflowsQuery.data?.items ?? [])
       .filter((workflow) => workflow.documentId)
@@ -123,6 +142,6 @@ export function useDocuments({
     documents: documentsQuery.data?.items ?? [],
     workflowsByDocumentId,
     deleteDocument,
-    reindexAvailable: false,
+    reindexDocument,
   };
 }

@@ -1,13 +1,18 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'ai';
 
 const useChatMock = vi.hoisted(() => vi.fn());
+const useConversationMessagesMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: useChatMock,
+}));
+
+vi.mock('@/hooks/use-conversation-messages', () => ({
+  useConversationMessages: useConversationMessagesMock,
 }));
 
 import { ChatView } from '@/components/chat/chat-view';
@@ -36,14 +41,22 @@ const messages: UIMessage[] = [
 describe('ChatView', () => {
   beforeEach(() => {
     useChatMock.mockReset();
+    useConversationMessagesMock.mockReset();
     useChatMock.mockReturnValue({
       messages,
+      setMessages: vi.fn(),
       sendMessage: vi.fn(),
       regenerate: vi.fn(),
       stop: vi.fn(),
       clearError: vi.fn(),
       status: 'ready',
       error: undefined,
+    });
+    useConversationMessagesMock.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isSuccess: true,
+      error: null,
     });
   });
 
@@ -64,5 +77,151 @@ describe('ChatView', () => {
     expect(screen.getAllByRole('table').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Quarterly Report').length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: 'Copy message' }).length).toBeGreaterThan(0);
+  });
+
+  it('hydrates saved transcripts into useChat messages for an existing conversation', async () => {
+    const setMessages = vi.fn();
+
+    useChatMock.mockReturnValue({
+      messages: [],
+      setMessages,
+      sendMessage: vi.fn(),
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    });
+    useConversationMessagesMock.mockReturnValue({
+      data: [
+        {
+          id: 'persisted_user',
+          role: 'user',
+          parts: [{ type: 'text', text: 'Load the saved transcript.' }],
+          metadata: { createdAt: '2026-01-01T00:00:00.000Z' },
+        },
+        {
+          id: 'persisted_assistant',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'Transcript restored.' },
+            { type: 'source-document', sourceId: 'document_1', title: 'Quarterly Report' },
+          ],
+          metadata: { createdAt: '2026-01-01T00:00:30.000Z' },
+        },
+      ],
+      isLoading: false,
+      isSuccess: true,
+      error: null,
+    });
+
+    render(createElement(ChatView, { initialConversationId: 'conversation_saved' }));
+
+    await waitFor(() =>
+      expect(setMessages).toHaveBeenCalledWith([
+        {
+          id: 'persisted_user',
+          role: 'user',
+          parts: [{ type: 'text', text: 'Load the saved transcript.' }],
+          metadata: { createdAt: '2026-01-01T00:00:00.000Z' },
+        },
+        {
+          id: 'persisted_assistant',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'Transcript restored.' },
+            { type: 'source-document', sourceId: 'document_1', title: 'Quarterly Report' },
+          ],
+          metadata: { createdAt: '2026-01-01T00:00:30.000Z' },
+        },
+      ]),
+    );
+  });
+
+  it('does not overwrite an active streaming transcript when saved messages finish loading', async () => {
+    const setMessages = vi.fn();
+
+    useChatMock.mockReturnValue({
+      messages: [{ id: 'live_user', role: 'user', parts: [{ type: 'text', text: 'Keep streaming.' }] }],
+      setMessages,
+      sendMessage: vi.fn(),
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'streaming',
+      error: undefined,
+    });
+    useConversationMessagesMock.mockReturnValue({
+      data: [
+        {
+          id: 'persisted_user',
+          role: 'user',
+          parts: [{ type: 'text', text: 'Older transcript.' }],
+        },
+      ],
+      isLoading: false,
+      isSuccess: true,
+      error: null,
+    });
+
+    render(createElement(ChatView, { initialConversationId: 'conversation_streaming' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Streaming answer')).toBeInTheDocument();
+    });
+    expect(setMessages).not.toHaveBeenCalled();
+  });
+
+  it('renders accessible tool execution states and ignores unknown parts', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant_tools',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'Working on it.' },
+            {
+              type: 'tool-retrieve_chunks',
+              toolCallId: 'tool_1',
+              state: 'input-available',
+              input: { query: 'report' },
+            },
+            {
+              type: 'tool-retrieve_chunks',
+              toolCallId: 'tool_2',
+              state: 'output-available',
+              input: { query: 'report' },
+              output: { chunks: [] },
+            },
+            {
+              type: 'dynamic-tool',
+              toolName: 'search_documents',
+              toolCallId: 'tool_3',
+              state: 'output-error',
+              input: { query: 'missing' },
+              errorText: 'Lookup failed.',
+            },
+            {
+              type: 'custom-part',
+              payload: 'ignored',
+            } as never,
+          ],
+        },
+      ],
+      setMessages: vi.fn(),
+      sendMessage: vi.fn(),
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    });
+
+    render(createElement(ChatView, { initialConversationId: 'conversation_tools' }));
+
+    expect(screen.getByLabelText('Tool retrieve chunks running')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tool retrieve chunks completed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tool search documents failed')).toBeInTheDocument();
+    expect(screen.queryByText('ignored')).not.toBeInTheDocument();
   });
 });

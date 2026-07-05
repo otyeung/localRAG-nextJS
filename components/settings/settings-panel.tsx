@@ -48,9 +48,17 @@ export function SettingsPanel() {
 
   useEffect(() => {
     if (settingsQuery.data) {
-      form.reset(settingsQuery.data);
+      const themeDirty = Boolean(form.formState.dirtyFields.theme);
+
+      form.reset(settingsQuery.data, {
+        keepDirtyValues: true,
+      });
+
+      if (!themeDirty) {
+        setTheme(settingsQuery.data.theme);
+      }
     }
-  }, [form, settingsQuery.data]);
+  }, [form, form.formState.dirtyFields.theme, setTheme, settingsQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: (values: SettingsForm) =>

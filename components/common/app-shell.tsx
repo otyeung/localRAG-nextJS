@@ -146,7 +146,9 @@ export function AppShell() {
                   onStatusFilterChange={setDocumentStatus}
                   onSortChange={setDocumentSort}
                   onDelete={(id) => documents.deleteDocument.mutate(id)}
-                  reindexAvailable={documents.reindexAvailable}
+                  onReindex={(id) => documents.reindexDocument.mutate(id)}
+                  reindexingDocumentId={documents.reindexDocument.isPending ? documents.reindexDocument.variables : null}
+                  reindexError={documents.reindexDocument.error?.message ?? null}
                 />
               </>
             ) : (

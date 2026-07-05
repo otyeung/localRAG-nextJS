@@ -101,3 +101,33 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
     return jsonError(toAppError(error), requestContext.requestId);
   }
 }
+
+export async function PATCH(request: Request, context: RouteContext): Promise<Response> {
+  const requestContext = getRequestContext(request);
+
+  try {
+    assertSameOrigin(request);
+    const { id } = validateWithSchema(documentRouteParamsSchema, await context.params, 'Invalid document route parameters.');
+    await enforcePreProvisionRouteRateLimit(request, requestContext, {
+      namespace: 'documents-api',
+      action: 'patch',
+      errorMessage: 'Too many document requests.',
+    });
+    const user = await getCurrentUser(request);
+    const rateLimitResult = await rateLimit(`documents:patch:${user.id}:${requestContext.ipAddress}`, {
+      namespace: 'documents-api',
+      limit: 20,
+      windowMs: 60_000,
+    });
+
+    if (!rateLimitResult.allowed) {
+      throw new AppError('RATE_LIMITED', 'Too many document requests.', {
+        resetAt: rateLimitResult.resetAt.toISOString(),
+      });
+    }
+
+    return jsonOk(await documentService.requestReindex(user.id, id, requestContext.requestId));
+  } catch (error) {
+    return jsonError(toAppError(error), requestContext.requestId);
+  }
+}

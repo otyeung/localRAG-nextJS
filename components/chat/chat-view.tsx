@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageComposer } from '@/components/chat/message-composer';
 import { MessageList } from '@/components/chat/message-list';
 import { StatusBadge } from '@/components/common/status-badge';
+import { useConversationMessages } from '@/hooks/use-conversation-messages';
 
 type ChatMessage = UIMessage<{
   model?: string;
@@ -31,6 +32,7 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
   const [draft, setDraft] = useState('');
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pendingHydrationConversationIdRef = useRef<string | null>(initialConversationId);
   const transport = useMemo(
     () =>
       new DefaultChatTransport<ChatMessage>({
@@ -43,6 +45,7 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
   );
   const {
     messages,
+    setMessages,
     sendMessage,
     regenerate,
     stop,
@@ -53,9 +56,37 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
     id: initialConversationId ?? 'new-chat',
     transport,
   });
+  const conversationMessages = useConversationMessages(initialConversationId);
 
   const latestAssistant = useMemo(() => getLatestAssistant(messages), [messages]);
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  useEffect(() => {
+    pendingHydrationConversationIdRef.current = initialConversationId;
+  }, [initialConversationId]);
+
+  useEffect(() => {
+    if (!initialConversationId || conversationMessages.isSuccess || messages.length === 0) {
+      return;
+    }
+
+    if (pendingHydrationConversationIdRef.current === initialConversationId) {
+      pendingHydrationConversationIdRef.current = null;
+    }
+  }, [conversationMessages.isSuccess, initialConversationId, messages.length]);
+
+  useEffect(() => {
+    if (!initialConversationId || !conversationMessages.isSuccess || isStreaming) {
+      return;
+    }
+
+    if (pendingHydrationConversationIdRef.current !== initialConversationId) {
+      return;
+    }
+
+    setMessages(conversationMessages.data);
+    pendingHydrationConversationIdRef.current = null;
+  }, [conversationMessages.data, conversationMessages.isSuccess, initialConversationId, isStreaming, setMessages]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -147,6 +178,11 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
           </div>
         </div>
       ) : null}
+      {conversationMessages.error ? (
+        <div className="mx-6 mt-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Saved transcript could not be loaded. Live chat is still available.
+        </div>
+      ) : null}
 
       <div
         ref={viewportRef}
@@ -163,6 +199,10 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
             onCopy={copyMessage}
             onRetry={(message) => regenerate({ messageId: message.id })}
           />
+        ) : initialConversationId && conversationMessages.isLoading ? (
+          <div className="flex h-full min-h-[22rem] items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center text-sm text-[color:var(--text-muted)]">
+            Loading saved transcript…
+          </div>
         ) : (
           <div className="flex h-full min-h-[22rem] flex-col items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center">
             <span className="rounded-full border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-4 text-[color:var(--text-muted)]">

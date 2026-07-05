@@ -40,6 +40,18 @@ function sortLabel(sort: 'createdAt' | 'updatedAt' | 'title') {
   return sort === 'title' ? 'Title' : sort === 'createdAt' ? 'Created' : 'Updated';
 }
 
+function canReindexDocument(document: DocumentRecord, workflow: WorkflowRecord | undefined) {
+  if (document.deletedAt) {
+    return false;
+  }
+
+  if (document.status === 'PENDING' || document.status === 'INGESTING') {
+    return false;
+  }
+
+  return workflow?.status !== 'RUNNING' && workflow?.status !== 'WAITING' && workflow?.status !== 'QUEUED';
+}
+
 export function DocumentLibrary({
   documents,
   workflowsByDocumentId,
@@ -51,7 +63,9 @@ export function DocumentLibrary({
   onStatusFilterChange,
   onSortChange,
   onDelete,
-  reindexAvailable,
+  onReindex,
+  reindexingDocumentId,
+  reindexError,
 }: {
   documents: DocumentRecord[];
   workflowsByDocumentId: Map<string, WorkflowRecord>;
@@ -63,7 +77,9 @@ export function DocumentLibrary({
   onStatusFilterChange: (value: 'ALL' | 'PENDING' | 'INGESTING' | 'READY' | 'FAILED') => void;
   onSortChange: (value: 'createdAt' | 'updatedAt' | 'title') => void;
   onDelete: (id: string) => void;
-  reindexAvailable: boolean;
+  onReindex: (id: string) => void;
+  reindexingDocumentId: string | null;
+  reindexError: string | null;
 }) {
   return (
     <section className="space-y-4">
@@ -108,12 +124,19 @@ export function DocumentLibrary({
           </div>
         </div>
       </div>
+      {reindexError ? (
+        <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {reindexError}
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         {documents.length > 0 ? (
           documents.map((document) => {
             const workflow = workflowsByDocumentId.get(document.id);
             const relatedUploads = uploadHistory.filter((upload) => upload.id === document.uploadId);
+            const canReindex = canReindexDocument(document, workflow);
+            const isReindexing = reindexingDocumentId === document.id;
 
             return (
               <article
@@ -202,11 +225,13 @@ export function DocumentLibrary({
                   <div className="flex flex-row gap-2 xl:flex-col">
                     <button
                       type="button"
-                      disabled={!reindexAvailable}
+                      aria-label={`Re-index ${document.title}`}
+                      disabled={!canReindex || isReindexing}
                       className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-4 py-2 text-sm font-medium text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => onReindex(document.id)}
                     >
-                      <RefreshCw className="h-4 w-4" />
-                      Re-index
+                      <RefreshCw className={['h-4 w-4', isReindexing ? 'animate-spin' : ''].join(' ')} />
+                      {isReindexing ? 'Re-indexing…' : 'Re-index'}
                     </button>
                     <button
                       type="button"

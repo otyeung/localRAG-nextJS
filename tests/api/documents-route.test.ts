@@ -9,6 +9,7 @@ const routeMocks = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   getDocument: vi.fn(),
   softDeleteDocument: vi.fn(),
+  requestReindex: vi.fn(),
   listPublicWorkflows: vi.fn(),
   getPublicWorkflowStatus: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock('@/lib/services/document-service', () => ({
     listDocuments = routeMocks.listDocuments;
     getDocument = routeMocks.getDocument;
     softDeleteDocument = routeMocks.softDeleteDocument;
+    requestReindex = routeMocks.requestReindex;
   },
 }));
 
@@ -41,7 +43,7 @@ vi.mock('@/lib/services/workflow-service', () => ({
 }));
 
 import { GET as listDocumentsRoute } from '@/app/api/documents/route';
-import { DELETE as deleteDocumentRoute, GET as getDocumentRoute } from '@/app/api/documents/[id]/route';
+import { DELETE as deleteDocumentRoute, GET as getDocumentRoute, PATCH as reindexDocumentRoute } from '@/app/api/documents/[id]/route';
 import { GET as listWorkflowsRoute } from '@/app/api/workflows/route';
 import { GET as getWorkflowRoute } from '@/app/api/workflows/[id]/route';
 
@@ -53,6 +55,7 @@ describe('documents routes', () => {
     routeMocks.listDocuments.mockReset();
     routeMocks.getDocument.mockReset();
     routeMocks.softDeleteDocument.mockReset();
+    routeMocks.requestReindex.mockReset();
     routeMocks.listPublicWorkflows.mockReset();
     routeMocks.getPublicWorkflowStatus.mockReset();
     routeMocks.getCurrentUser.mockResolvedValue({
@@ -148,6 +151,11 @@ describe('documents routes', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-03T00:00:00.000Z',
       deletedAt: '2026-01-03T00:00:00.000Z',
+    });
+    routeMocks.requestReindex.mockResolvedValue({
+      workflowExecutionId: 'workflow_2',
+      externalExecutionId: 'n8n_2',
+      status: 'RUNNING',
     });
   });
 
@@ -352,6 +360,31 @@ describe('documents routes', () => {
       ipAddress: 'unknown',
       userAgent: 'vitest',
     });
+  });
+
+  it('queues document re-indexing for the current user', async () => {
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      method: 'PATCH',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_document_reindex',
+      },
+    });
+
+    const response = await reindexDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        workflowExecutionId: 'workflow_2',
+        externalExecutionId: 'n8n_2',
+        status: 'RUNNING',
+      },
+    });
+    expect(routeMocks.requestReindex).toHaveBeenCalledWith('user_1', 'document_1', 'req_document_reindex');
   });
 
   it('omits internal document storage fields from delete responses', async () => {
