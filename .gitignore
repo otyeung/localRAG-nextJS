@@ -1,0 +1,13 @@
+node_modules
+.next
+coverage
+playwright-report
+blob-report
+test-results
+*.tsbuildinfo
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.superpowers/
