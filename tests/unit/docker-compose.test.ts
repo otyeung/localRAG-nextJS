@@ -157,6 +157,18 @@ describe('docker compose', () => {
     expect(deleteTargets).toContain('Read PDF From Shared Volume');
   });
 
+  it('builds Qdrant point ids as UUIDs while retaining document metadata in the payload', () => {
+    const buildPointNode = getNode(ingestionWorkflow, 'Build Qdrant Point');
+    const buildPointCode = String(buildPointNode.parameters?.jsCode ?? '');
+    const upsertNode = getNode(ingestionWorkflow, 'Upsert Into Qdrant');
+    const upsertBody = String(upsertNode.parameters?.jsonBody ?? '');
+
+    expect(buildPointCode).toContain('crypto.randomUUID()');
+    expect(buildPointCode).not.toContain('`${source.documentId}:${source.chunkIndex}`');
+    expect(upsertBody).toContain('"documentId":$json.documentId');
+    expect(upsertBody).toContain('"chunkIndex":$json.chunkIndex');
+  });
+
   it('preserves retrieval metadata after embedding when building the Qdrant search request', () => {
     const buildSearchNode = getNode(retrievalWorkflow, 'Build Search Body');
     const buildSearchCode = String(buildSearchNode.parameters?.jsCode ?? '');
@@ -185,5 +197,22 @@ describe('docker compose', () => {
     expect(ingestionValidationCode).toContain('N8N_WEBHOOK_SECRET');
     expect(retrievalValidationCode).toContain('x-n8n-webhook-secret');
     expect(retrievalValidationCode).toContain('N8N_WEBHOOK_SECRET');
+  });
+
+  it.each([
+    ['ingestion', ingestionWorkflow],
+    ['retrieval', retrievalWorkflow],
+  ])('uses env-backed OpenAI auth in the %s workflow without imported credentials', (_name, workflow) => {
+    const embeddingNodeName = workflow === ingestionWorkflow ? 'Create Embedding' : 'Embed Query';
+    const embeddingNode = getNode(workflow, embeddingNodeName);
+    const parameters = JSON.stringify(embeddingNode.parameters ?? {});
+    const credentials = JSON.stringify((embeddingNode as WorkflowNode & { credentials?: unknown }).credentials ?? {});
+
+    expect(parameters).toContain('"sendHeaders":true');
+    expect(parameters).toContain('Authorization');
+    expect(parameters).toContain('OPENAI_API_KEY');
+    expect(parameters).not.toContain('predefinedCredentialType');
+    expect(parameters).not.toContain('httpHeaderAuth');
+    expect(credentials).toBe('{}');
   });
 });

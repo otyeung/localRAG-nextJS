@@ -125,17 +125,18 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.openai.com/v1/embeddings",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\"model\": $env.OPENAI_EMBEDDING_MODEL || \"text-embedding-3-small\", \"input\": $json.content}",
-        "options": {}
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "openai-embeddings-env",
-          "name": "OpenAI Embeddings (env)"
+        "options": {},
+        "sendHeaders": true,
+        "headerParametersUi": {
+          "headerParameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            }
+          ]
         }
       }
     },
@@ -150,7 +151,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: crypto.randomUUID(),\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
       }
     },
     {

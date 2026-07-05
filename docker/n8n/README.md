@@ -18,19 +18,16 @@ They are exported as active workflows so a fresh `docker compose up` registers t
 - Next.js talks to n8n over the internal Docker network at `http://n8n:5678`; workflow URLs stay server-side and each webhook request must include the internal `x-n8n-webhook-secret` header.
 - n8n does not auto-provision REST API keys in Compose. `nextjs` can still boot without `N8N_API_KEY`, but `/api/health` will report n8n API auth as degraded until an operator generates and supplies a real key.
 
-## OpenAI credential expectation
+## OpenAI authentication
 
-The HTTP request nodes reference an n8n credential named `OpenAI Embeddings (env)`. In local n8n, create that credential as an HTTP Header Auth credential with:
+The OpenAI embedding request nodes set the `Authorization` header from `OPENAI_API_KEY` at runtime inside the n8n container. Fresh imports work without creating any n8n credential records first, and workflow re-imports cannot break a manual credential relink because there is no credential dependency to preserve.
 
-- Header name: `Authorization`
-- Header value: `Bearer {{$env.OPENAI_API_KEY}}`
-
-This keeps the secret in environment variables instead of workflow JSON.
+Because the header is resolved server-side from container environment variables, the secret never needs to be exposed to the browser.
 
 ## Required operator bootstrap
 
 1. Start the stack with a temporary localhost-only n8n editor binding (for example via a one-off Compose override that maps `127.0.0.1:5678:5678`).
-2. Open n8n, create the `OpenAI Embeddings (env)` credential, then generate an API key from **Settings → n8n API**.
+2. Open n8n and generate an API key from **Settings → n8n API**.
 3. Export that value as `N8N_API_KEY` in your Compose environment and restart `nextjs` (or recreate the container).
 
 Without an operator-created `N8N_API_KEY`, the app can still invoke internal webhook endpoints with `N8N_WEBHOOK_SECRET`, but n8n REST execution/status calls return a configuration error and health remains degraded.

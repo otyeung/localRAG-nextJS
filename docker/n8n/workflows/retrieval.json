@@ -63,17 +63,18 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.openai.com/v1/embeddings",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\"model\": $env.OPENAI_EMBEDDING_MODEL || \"text-embedding-3-small\", \"input\": $json.query}",
-        "options": {}
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "openai-embeddings-env",
-          "name": "OpenAI Embeddings (env)"
+        "options": {},
+        "sendHeaders": true,
+        "headerParametersUi": {
+          "headerParameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            }
+          ]
         }
       }
     },
