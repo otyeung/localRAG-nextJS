@@ -72,6 +72,19 @@ describe('docker compose', () => {
     expect(embedBody).toContain('OPENAI_EMBEDDING_MODEL');
   });
 
+  it('returns an app-compatible ingestion start result contract from the webhook response', () => {
+    const summarizeNode = getNode(ingestionWorkflow, 'Summarize Result');
+    const summarizeCode = String(summarizeNode.parameters?.jsCode ?? '');
+
+    expect(summarizeCode).toContain('executionId');
+    expect(summarizeCode).toContain('$execution.id');
+    expect(summarizeCode).toContain('workflowId');
+    expect(summarizeCode).toContain('status');
+    expect(summarizeCode).toContain('message');
+    expect(summarizeCode).not.toContain('chunkCount');
+    expect(summarizeCode).not.toContain('contentPreview');
+  });
+
   it('preserves retrieval metadata after embedding when building the Qdrant search request', () => {
     const buildSearchNode = getNode(retrievalWorkflow, 'Build Search Body');
     const buildSearchCode = String(buildSearchNode.parameters?.jsCode ?? '');

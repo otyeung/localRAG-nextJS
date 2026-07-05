@@ -164,7 +164,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const first = items[0]?.json;\nreturn [{ json: {\n  documentId: first?.documentId ?? null,\n  uploadId: first?.uploadId ?? null,\n  documentName: first?.fileName ?? null,\n  extractedTextLength: String(first?.extractedText ?? '').length,\n  chunkCount: items.length,\n  chunks: items.map((item) => ({\n    id: item.json.pointId,\n    chunkIndex: item.json.chunkIndex,\n    tokenCount: item.json.tokenCount,\n    contentPreview: String(item.json.content).slice(0, 160),\n  })),\n} }];"
+        "jsCode": "const executionId = String($execution.id ?? '').trim();\nif (!executionId) {\n  throw new Error('execution id unavailable for ingestion response');\n}\nconst workflowId = $workflow.id == null ? null : String($workflow.id);\nreturn [{ json: {\n  executionId,\n  workflowId,\n  status: 'success',\n  message: 'Document ingestion completed.',\n} }];"
       }
     },
     {
