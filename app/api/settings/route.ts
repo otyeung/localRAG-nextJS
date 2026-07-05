@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { getAnonymousCookieValue, isAnonymousFingerprint } from '@/lib/auth/anonymous-provider';
+import { getVerifiedAnonymousFingerprint } from '@/lib/auth/anonymous-provider';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
@@ -36,10 +36,10 @@ async function enforceRateLimit(key: string): Promise<void> {
 }
 
 function buildPreProvisionRateLimitKey(request: Request, requestContext: RequestContext, method: 'get' | 'patch'): string {
-  const anonymousCookie = getAnonymousCookieValue(request);
+  const anonymousFingerprint = getVerifiedAnonymousFingerprint(request);
 
-  if (isAnonymousFingerprint(anonymousCookie)) {
-    return `settings:pre:${method}:cookie:${anonymousCookie}`;
+  if (anonymousFingerprint) {
+    return `settings:pre:${method}:cookie:${anonymousFingerprint}`;
   }
 
   return `settings:pre:${method}:context:${requestContext.ipAddress}:${requestContext.userAgent}`;

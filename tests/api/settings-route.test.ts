@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('server-only', () => ({}));
+import { createAnonymousCookieValue } from '@/lib/auth/anonymous-provider';
 
 const routeMocks = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
@@ -230,6 +232,70 @@ describe('settings route', () => {
     expect(routeMocks.rateLimit).toHaveBeenCalledTimes(1);
     expect(routeMocks.rateLimit).toHaveBeenCalledWith(
       'settings:pre:patch:context:unknown:vitest',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('uses a signed anonymous cookie for the pre-provision rate-limit key', async () => {
+    const fingerprint = 'knownfingerprintvalue123456789ab';
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        cookie: `localrag_anonymous_id=${createAnonymousCookieValue(fingerprint)}`,
+        'x-request-id': 'req_signed_cookie',
+        'user-agent': 'vitest',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      `settings:pre:get:cookie:${fingerprint}`,
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('does not trust a forged unsigned 32-character cookie for the pre-provision rate-limit key', async () => {
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        cookie: 'localrag_anonymous_id=knownfingerprintvalue123456789ab',
+        'x-request-id': 'req_forged_cookie',
+        'user-agent': 'vitest',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:get:context:unknown:vitest',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('does not trust an invalid signed cookie for the pre-provision rate-limit key', async () => {
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        cookie: 'localrag_anonymous_id=knownfingerprintvalue123456789ab.invalidsignature',
+        'x-request-id': 'req_invalid_signature',
+        'user-agent': 'vitest',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:get:context:unknown:vitest',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),

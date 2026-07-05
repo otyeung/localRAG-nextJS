@@ -5,23 +5,21 @@ import { cookies } from 'next/headers';
 import { prisma } from '@/lib/db/prisma';
 import {
   ANONYMOUS_COOKIE_NAME,
+  createAnonymousCookieValue,
   createAnonymousFingerprint,
   createAnonymousFingerprintHash,
-  getAnonymousCookieValue,
-  isAnonymousFingerprint,
+  getVerifiedAnonymousFingerprint,
 } from '@/lib/auth/anonymous-provider';
 import type { AuthUser } from '@/lib/auth/types';
 import { UserRepository } from '@/lib/repositories/user-repository';
 
 export async function getCurrentUser(request: Request): Promise<AuthUser> {
   const cookieStore = await cookies();
-  const existingFingerprint = getAnonymousCookieValue(request);
-  const fingerprint = isAnonymousFingerprint(existingFingerprint)
-    ? existingFingerprint
-    : createAnonymousFingerprint();
+  const existingFingerprint = getVerifiedAnonymousFingerprint(request);
+  const fingerprint = existingFingerprint ?? createAnonymousFingerprint();
 
-  if (!isAnonymousFingerprint(existingFingerprint)) {
-    cookieStore.set(ANONYMOUS_COOKIE_NAME, fingerprint, {
+  if (!existingFingerprint) {
+    cookieStore.set(ANONYMOUS_COOKIE_NAME, createAnonymousCookieValue(fingerprint), {
       httpOnly: true,
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',

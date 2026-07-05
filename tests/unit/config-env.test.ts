@@ -22,11 +22,13 @@ describe('createEnv', () => {
       QDRANT_COLLECTION: 'documents',
       QDRANT_VECTOR_SIZE: '1536',
       QDRANT_DISTANCE: 'Cosine',
+      ANONYMOUS_COOKIE_SECRET: 'test-anonymous-cookie-secret',
     });
 
     expect(env.n8n.timeoutMs).toBe(30_000);
     expect(env.upload.maxBytes).toBe(52_428_800);
     expect(env.qdrant.collection).toBe('documents');
+    expect(env.auth.anonymousCookieSecret).toBe('test-anonymous-cookie-secret');
   });
 
   it('rejects invalid URLs and numeric values', () => {
@@ -47,6 +49,7 @@ describe('createEnv', () => {
         QDRANT_COLLECTION: 'documents',
         QDRANT_VECTOR_SIZE: '1536',
         QDRANT_DISTANCE: 'Cosine',
+        ANONYMOUS_COOKIE_SECRET: '',
       }),
     ).toThrow();
   });

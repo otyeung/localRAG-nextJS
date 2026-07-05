@@ -28,7 +28,11 @@ vi.mock('@/lib/repositories/user-repository', () => ({
   },
 }));
 
-import { createAnonymousFingerprintHash } from '@/lib/auth/anonymous-provider';
+import {
+  createAnonymousCookieValue,
+  createAnonymousFingerprintHash,
+  verifyAnonymousCookieValue,
+} from '@/lib/auth/anonymous-provider';
 import { getCurrentUser } from '@/lib/auth/current-user';
 
 describe('anonymous auth provider', () => {
@@ -57,7 +61,28 @@ describe('anonymous auth provider', () => {
     expect(first).not.toContain('browser-a');
   });
 
-  it('reuses the anonymous cookie when the request already has one', async () => {
+  it('accepts a signed anonymous cookie and keeps it stable', async () => {
+    const fingerprint = 'knownfingerprintvalue123456789ab';
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        cookie: `localrag_anonymous_id=${createAnonymousCookieValue(fingerprint)}`,
+      },
+    });
+
+    const user = await getCurrentUser(request);
+
+    expect(user).toEqual({
+      id: 'user_1',
+      displayName: 'Local User',
+      provider: 'anonymous',
+    });
+    expect(authMocks.findOrCreateAnonymousUser).toHaveBeenCalledWith(
+      await createAnonymousFingerprintHash(fingerprint),
+    );
+    expect(authMocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  it('rejects a forged unsigned 32-character anonymous cookie and replaces it', async () => {
     const request = new Request('https://app.example.com/api/settings', {
       headers: {
         cookie: 'localrag_anonymous_id=knownfingerprintvalue123456789ab',
@@ -72,9 +97,17 @@ describe('anonymous auth provider', () => {
       provider: 'anonymous',
     });
     expect(authMocks.findOrCreateAnonymousUser).toHaveBeenCalledWith(
-      await createAnonymousFingerprintHash('knownfingerprintvalue123456789ab'),
+      await createAnonymousFingerprintHash('0123456789abcdefghijklmnopqrstuv'),
     );
-    expect(authMocks.setCookie).not.toHaveBeenCalled();
+    expect(authMocks.setCookie).toHaveBeenCalledWith(
+      'localrag_anonymous_id',
+      createAnonymousCookieValue('0123456789abcdefghijklmnopqrstuv'),
+      expect.objectContaining({
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      }),
+    );
   });
 
   it('creates and stores a new anonymous fingerprint when the request has no cookie', async () => {
@@ -87,7 +120,7 @@ describe('anonymous auth provider', () => {
     );
     expect(authMocks.setCookie).toHaveBeenCalledWith(
       'localrag_anonymous_id',
-      '0123456789abcdefghijklmnopqrstuv',
+      createAnonymousCookieValue('0123456789abcdefghijklmnopqrstuv'),
       expect.objectContaining({
         httpOnly: true,
         path: '/',
@@ -110,45 +143,34 @@ describe('anonymous auth provider', () => {
     );
     expect(authMocks.setCookie).toHaveBeenCalledWith(
       'localrag_anonymous_id',
-      '0123456789abcdefghijklmnopqrstuv',
+      createAnonymousCookieValue('0123456789abcdefghijklmnopqrstuv'),
       expect.any(Object),
     );
   });
 
-  it('does not let malformed anonymous cookies collapse callers into one shared identity', async () => {
-    authMocks.findOrCreateAnonymousUser
-      .mockResolvedValueOnce({
-        id: 'user_2',
-        displayName: 'Local User',
-      })
-      .mockResolvedValueOnce({
-        id: 'user_3',
-        displayName: 'Local User',
-      });
-
-    const blankCookieRequest = new Request('https://app.example.com/api/settings', {
+  it('replaces an invalid signed anonymous cookie instead of trusting it', async () => {
+    const request = new Request('https://app.example.com/api/settings', {
       headers: {
-        cookie: 'localrag_anonymous_id=',
-      },
-    });
-    const malformedCookieRequest = new Request('https://app.example.com/api/settings', {
-      headers: {
-        cookie: 'localrag_anonymous_id=bad cookie value',
+        cookie: 'localrag_anonymous_id=knownfingerprintvalue123456789ab.invalidsignature',
       },
     });
 
-    const firstUser = await getCurrentUser(blankCookieRequest);
-    const secondUser = await getCurrentUser(malformedCookieRequest);
+    await getCurrentUser(request);
 
-    expect(firstUser.id).not.toBe(secondUser.id);
-    expect(authMocks.findOrCreateAnonymousUser).toHaveBeenNthCalledWith(
-      1,
+    expect(authMocks.findOrCreateAnonymousUser).toHaveBeenCalledWith(
       await createAnonymousFingerprintHash('0123456789abcdefghijklmnopqrstuv'),
     );
-    expect(authMocks.findOrCreateAnonymousUser).toHaveBeenNthCalledWith(
-      2,
-      await createAnonymousFingerprintHash('abcdefghijklmnopqrstuvwxyzABCDEF'),
+    expect(authMocks.setCookie).toHaveBeenCalledWith(
+      'localrag_anonymous_id',
+      createAnonymousCookieValue('0123456789abcdefghijklmnopqrstuv'),
+      expect.any(Object),
     );
-    expect(authMocks.setCookie).toHaveBeenCalledTimes(2);
+  });
+
+  it('verifies the signature of anonymous cookies', () => {
+    const fingerprint = 'knownfingerprintvalue123456789ab';
+
+    expect(verifyAnonymousCookieValue(createAnonymousCookieValue(fingerprint))).toBe(fingerprint);
+    expect(verifyAnonymousCookieValue(`${fingerprint}.invalidsignature`)).toBeUndefined();
   });
 });

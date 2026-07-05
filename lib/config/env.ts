@@ -18,6 +18,7 @@ const rawEnvSchema = z.object({
   QDRANT_COLLECTION: z.string().min(1).default('documents'),
   QDRANT_VECTOR_SIZE: z.coerce.number().int().positive().default(1_536),
   QDRANT_DISTANCE: z.enum(['Cosine', 'Dot', 'Euclid', 'Manhattan']).default('Cosine'),
+  ANONYMOUS_COOKIE_SECRET: z.string().min(1),
 });
 
 export type AppEnv = {
@@ -47,6 +48,9 @@ export type AppEnv = {
     collection: string;
     vectorSize: number;
     distance: 'Cosine' | 'Dot' | 'Euclid' | 'Manhattan';
+  };
+  auth: {
+    anonymousCookieSecret: string;
   };
 };
 
@@ -83,6 +87,9 @@ export function createEnv(source: EnvSource): AppEnv {
       vectorSize: parsed.QDRANT_VECTOR_SIZE,
       distance: parsed.QDRANT_DISTANCE,
     },
+    auth: {
+      anonymousCookieSecret: parsed.ANONYMOUS_COOKIE_SECRET,
+    },
   };
 }
 
@@ -102,6 +109,7 @@ const testEnvDefaults: EnvSource = {
   QDRANT_COLLECTION: 'documents',
   QDRANT_VECTOR_SIZE: '1536',
   QDRANT_DISTANCE: 'Cosine',
+  ANONYMOUS_COOKIE_SECRET: 'localrag-nextjs-test-anonymous-cookie-secret',
 };
 
 const envSource = process.env.NODE_ENV === 'test' ? { ...testEnvDefaults, ...process.env } : process.env;
