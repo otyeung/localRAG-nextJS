@@ -1,9 +1,10 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
+import { useQueryClient } from '@tanstack/react-query';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { AlertTriangle, Bot, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MessageComposer } from '@/components/chat/message-composer';
 import { MessageList } from '@/components/chat/message-list';
@@ -29,17 +30,49 @@ function getLatestAssistant(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'assistant');
 }
 
-export function ChatView({ initialConversationId }: { initialConversationId: string | null }) {
+export function ChatView({
+  initialConversationId,
+  onConversationResolved,
+}: {
+  initialConversationId: string | null;
+  onConversationResolved?: (conversationId: string) => void;
+}) {
   const [draft, setDraft] = useState('');
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pendingHydrationConversationIdRef = useRef<string | null>(initialConversationId);
+  const pendingResolvedConversationIdRef = useRef<string | null>(null);
+  const queryClient = useQueryClient();
+  const syncConversationCaches = useCallback(
+    async (resolvedConversationId: string | null) => {
+      await queryClient.invalidateQueries({ queryKey: ['conversations'] });
+
+      const targetConversationId = resolvedConversationId ?? initialConversationId;
+      if (targetConversationId) {
+        await queryClient.invalidateQueries({ queryKey: ['messages', targetConversationId] });
+      }
+
+      if (resolvedConversationId && resolvedConversationId !== initialConversationId) {
+        onConversationResolved?.(resolvedConversationId);
+      }
+    },
+    [initialConversationId, onConversationResolved, queryClient],
+  );
   const transport = useMemo(
     () =>
       new DefaultChatTransport<ChatMessage>({
         api: '/api/chat',
         body: {
           conversationId: initialConversationId,
+        },
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          const resolvedConversationId = response.headers.get('x-conversation-id')?.trim();
+
+          pendingResolvedConversationIdRef.current =
+            resolvedConversationId && resolvedConversationId.length > 0 ? resolvedConversationId : null;
+
+          return response;
         },
       }),
     [initialConversationId],
@@ -56,6 +89,16 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
   } = useChat<ChatMessage>({
     id: initialConversationId ?? 'new-chat',
     transport,
+    onFinish: ({ isAbort, isError }) => {
+      if (isAbort || isError) {
+        pendingResolvedConversationIdRef.current = null;
+        return;
+      }
+
+      const resolvedConversationId = pendingResolvedConversationIdRef.current;
+      pendingResolvedConversationIdRef.current = null;
+      void syncConversationCaches(resolvedConversationId);
+    },
   });
   const conversationMessages = useConversationMessages(initialConversationId);
   const userSettings = useUserSettings();

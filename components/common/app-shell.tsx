@@ -129,7 +129,7 @@ export function AppShell() {
           />
 
           <main aria-label="Chat workspace" className="min-w-0">
-            <ChatView initialConversationId={activeConversationId} />
+            <ChatView initialConversationId={activeConversationId} onConversationResolved={setActiveConversationId} />
           </main>
 
           <aside className="space-y-4">

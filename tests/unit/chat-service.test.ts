@@ -161,6 +161,7 @@ describe('ChatService', () => {
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('x-conversation-id')).toBe('conversation_1');
     expect(db.$transaction).toHaveBeenCalledOnce();
     expect(messageCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -209,6 +210,7 @@ describe('ChatService', () => {
       {
         id: 'tool_call_1',
         name: 'retrieve_chunks',
+        status: 'COMPLETED',
         result: {
           chunks: [
             {
@@ -227,6 +229,7 @@ describe('ChatService', () => {
             internal: true,
           },
         },
+        errorMessage: null,
       },
     ]);
     runAgent.mockResolvedValue({
@@ -268,14 +271,14 @@ describe('ChatService', () => {
     expect(toolCallFindMany).toHaveBeenCalledWith({
       where: {
         agentRunId: 'agent_run_1',
-        name: 'retrieve_chunks',
-        status: 'COMPLETED',
       },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
         name: true,
+        status: true,
         result: true,
+        errorMessage: true,
       },
     });
     expect(messageCreate).toHaveBeenNthCalledWith(
@@ -296,6 +299,20 @@ describe('ChatService', () => {
               snippet: 'Cargo capacity: 4,500 metric tons with balanced load distribution.',
             },
           ],
+          toolCalls: [
+            {
+              id: 'tool_call_1',
+              name: 'retrieve_chunks',
+              status: 'COMPLETED',
+            },
+          ],
+          metadata: {
+            activeAgentName: 'GeneralAssistantAgent',
+            agent: 'GeneralAssistantAgent',
+            model: 'test-model',
+            requestId: 'req_chat_service_citations',
+            agentRunId: 'agent_run_1',
+          },
         }),
       }),
     );
@@ -303,6 +320,8 @@ describe('ChatService', () => {
     expect(assistantPayload.citations[0]).not.toHaveProperty('content');
     expect(assistantPayload.citations[0]).not.toHaveProperty('metadata');
     expect(assistantPayload.citations[0]).not.toHaveProperty('rawPayload');
+    expect(assistantPayload.toolCalls[0]).not.toHaveProperty('arguments');
+    expect(assistantPayload.toolCalls[0]).not.toHaveProperty('result');
   });
 
   it('rebuilds new conversation search text from persisted messages without duplicating the first prompt', async () => {
@@ -346,6 +365,7 @@ describe('ChatService', () => {
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('x-conversation-id')).toBe('conversation_new_1');
     expect(messageFindMany).toHaveBeenCalledWith({
       where: {
         conversationId: 'conversation_new_1',

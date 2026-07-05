@@ -8,7 +8,11 @@ import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { sanitizePublicMessageMetadata, sanitizePublicToolCalls } from '@/lib/chat/public-message-ui';
+import {
+  extractAgentRunId,
+  sanitizePublicMessageMetadata,
+  sanitizePublicToolCalls,
+} from '@/lib/chat/public-message-ui';
 
 const messagesQuerySchema = z.object({
   conversationId: z.string().trim().min(1),
@@ -16,6 +20,28 @@ const messagesQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
   order: z.enum(['asc', 'desc']).default('asc'),
 });
+
+function mergePublicMetadata(primary: unknown, fallback: unknown) {
+  const safePrimary = sanitizePublicMessageMetadata(primary) ?? {};
+  const safeFallback = sanitizePublicMessageMetadata(fallback) ?? {};
+
+  return sanitizePublicMessageMetadata({
+    ...safeFallback,
+    ...safePrimary,
+  });
+}
+
+type AgentRunHydrationRecord = {
+  id: string;
+  model: string | null;
+  metadata: unknown;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    status: 'STARTED' | 'COMPLETED' | 'FAILED';
+    errorMessage: string | null;
+  }>;
+};
 
 export async function GET(request: Request): Promise<Response> {
   const requestContext = getRequestContext(request);
@@ -74,18 +100,59 @@ export async function GET(request: Request): Promise<Response> {
       }),
       prisma.message.count({ where }),
     ]);
+    const missingAgentRunIds = [
+      ...new Set(items.map((message) => extractAgentRunId(message.metadata)).filter((agentRunId): agentRunId is string => Boolean(agentRunId))),
+    ];
+    const agentRuns: AgentRunHydrationRecord[] =
+      missingAgentRunIds.length > 0
+        ? await prisma.agentRun.findMany({
+            where: {
+              id: {
+                in: missingAgentRunIds,
+              },
+            },
+            select: {
+              id: true,
+              model: true,
+              metadata: true,
+              toolCalls: {
+                select: {
+                  id: true,
+                  name: true,
+                  status: true,
+                  errorMessage: true,
+                },
+                orderBy: { createdAt: 'asc' },
+              },
+            },
+          })
+        : [];
+    const agentRunById = new Map(agentRuns.map((agentRun) => [agentRun.id, agentRun]));
 
     return jsonOk({
-      items: items.map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        citations: message.citations,
-        toolCalls: sanitizePublicToolCalls(message.toolCalls),
-        metadata: sanitizePublicMessageMetadata(message.metadata),
-        createdAt: message.createdAt.toISOString(),
-        updatedAt: message.updatedAt.toISOString(),
-      })),
+      items: items.map((message) => {
+        const agentRunId = extractAgentRunId(message.metadata);
+        const agentRun = agentRunId ? agentRunById.get(agentRunId) : undefined;
+        const toolCalls = sanitizePublicToolCalls(message.toolCalls);
+        const metadata = mergePublicMetadata(message.metadata, {
+          model: agentRun?.model,
+          activeAgentName:
+            agentRun?.metadata && typeof agentRun.metadata === 'object' && !Array.isArray(agentRun.metadata)
+              ? (agentRun.metadata as Record<string, unknown>).activeAgentName
+              : undefined,
+        });
+
+        return {
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          citations: message.citations,
+          toolCalls: toolCalls.length > 0 ? toolCalls : sanitizePublicToolCalls(agentRun?.toolCalls),
+          metadata,
+          createdAt: message.createdAt.toISOString(),
+          updatedAt: message.updatedAt.toISOString(),
+        };
+      }),
       total,
       page: query.page,
       pageSize: query.pageSize,

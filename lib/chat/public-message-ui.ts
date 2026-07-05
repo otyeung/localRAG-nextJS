@@ -138,6 +138,15 @@ export function sanitizePublicMessageMetadata(metadata: unknown): PublicMessageM
   return Object.keys(safeMetadata).length > 0 ? safeMetadata : null;
 }
 
+export function extractAgentRunId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const agentRunId = (metadata as Record<string, unknown>).agentRunId;
+  return typeof agentRunId === 'string' && agentRunId.trim().length > 0 ? agentRunId : null;
+}
+
 export function sanitizePublicToolCalls(toolCalls: unknown): PublicToolCallRecord[] {
   if (!Array.isArray(toolCalls)) {
     return [];

@@ -1,13 +1,14 @@
 import 'server-only';
 
 import { AgentRunStatus, ConversationStatus, MessageRole, Prisma } from '@prisma/client';
-import { run, type Agent, type AgentInputItem, type StreamedRunResult } from '@openai/agents';
+import { run, type Agent, type AgentInputItem, type AgentOutputType, type StreamedRunResult } from '@openai/agents';
 import { createAiSdkUiMessageStreamResponse } from '@openai/agents-extensions/ai-sdk-ui';
 import { z } from 'zod';
 
 import { agentRegistry, defaultAgentName } from '@/agents/registry';
 import type { AgentToolRuntimeContext } from '@/agents/tools/shared';
 import { env } from '@/lib/config/env';
+import { sanitizePublicToolCalls } from '@/lib/chat/public-message-ui';
 import {
   AUTO_TITLE_PLACEHOLDER,
   getConversationTitleSource,
@@ -25,7 +26,7 @@ import { WorkflowService } from '@/lib/services/workflow-service';
 
 type ChatDb = Pick<typeof prisma, '$transaction' | 'conversation' | 'message' | 'agentRun' | 'toolCall' | 'auditLog'>;
 type ChatTransactionDb = Prisma.TransactionClient;
-type ChatAgent = Agent<AgentToolRuntimeContext, any>;
+type ChatAgent = Agent<AgentToolRuntimeContext, AgentOutputType>;
 type AssistantCitation = {
   toolCallId?: string;
   chunkId: string;
@@ -326,17 +327,22 @@ export class ChatService {
             const assistantCitations = await transaction.toolCall.findMany({
               where: {
                 agentRunId: agentRun.id,
-                name: 'retrieve_chunks',
-                status: 'COMPLETED',
               },
               orderBy: { createdAt: 'asc' },
               select: {
                 id: true,
                 name: true,
+                status: true,
                 result: true,
+                errorMessage: true,
               },
             });
-            const citations = extractAssistantCitations(assistantCitations);
+            const citations = extractAssistantCitations(
+              assistantCitations.filter((toolCall) => toolCall.name === 'retrieve_chunks' && toolCall.status === 'COMPLETED'),
+            );
+            const publicToolCalls = sanitizePublicToolCalls(assistantCitations);
+            const model = typeof selectedAgent.model === 'string' ? selectedAgent.model : env.openai.model;
+            const activeAgentName = stream.activeAgent?.name ?? selectedAgent.name;
 
             if (assistantText) {
               await transaction.message.create({
@@ -345,8 +351,11 @@ export class ChatService {
                   role: MessageRole.ASSISTANT,
                   content: assistantText,
                   citations: citations.length > 0 ? citations : Prisma.JsonNull,
+                  toolCalls: publicToolCalls.length > 0 ? publicToolCalls : Prisma.JsonNull,
                   metadata: {
-                    activeAgentName: stream.activeAgent?.name ?? selectedAgent.name,
+                    activeAgentName,
+                    agent: selectedAgent.name,
+                    model,
                     requestId: input.requestId,
                     agentRunId: agentRun.id,
                   },
@@ -395,7 +404,9 @@ export class ChatService {
           });
         });
 
-      return this.streamResponseFactory(stream);
+      const response = this.streamResponseFactory(stream);
+      response.headers.set('x-conversation-id', conversation.id);
+      return response;
     } catch (error) {
       await this.db.agentRun.update({
         where: { id: agentRun.id },

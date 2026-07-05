@@ -7,9 +7,14 @@ import type { UIMessage } from 'ai';
 const useChatMock = vi.hoisted(() => vi.fn());
 const useConversationMessagesMock = vi.hoisted(() => vi.fn());
 const useUserSettingsMock = vi.hoisted(() => vi.fn());
+const useQueryClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: useChatMock,
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: useQueryClientMock,
 }));
 
 vi.mock('@/hooks/use-conversation-messages', () => ({
@@ -44,6 +49,10 @@ const messages: UIMessage[] = [
 ];
 
 describe('ChatView', () => {
+  const queryClient = {
+    invalidateQueries: vi.fn().mockResolvedValue(undefined),
+  };
+
   afterEach(() => {
     cleanup();
   });
@@ -67,6 +76,8 @@ describe('ChatView', () => {
       isSuccess: true,
       error: null,
     });
+    useQueryClientMock.mockReturnValue(queryClient);
+    queryClient.invalidateQueries.mockClear();
     useUserSettingsMock.mockReturnValue({
       data: {
         theme: 'system',
@@ -194,6 +205,46 @@ describe('ChatView', () => {
       expect(screen.getByText('Streaming answer')).toBeInTheDocument();
     });
     expect(setMessages).not.toHaveBeenCalled();
+  });
+
+  it('invalidates conversations and selects the server conversation when streaming finishes', async () => {
+    const onConversationResolved = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          'x-conversation-id': 'conversation_server_1',
+        },
+      }),
+    );
+
+    render(createElement(ChatView, { initialConversationId: null, onConversationResolved }));
+
+    const chatOptions = useChatMock.mock.calls[0]?.[0];
+    const transport = chatOptions?.transport as {
+      fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    };
+
+    await transport.fetch?.('/api/chat', {
+      method: 'POST',
+    });
+    await chatOptions?.onFinish?.({
+      message: messages[1],
+      messages,
+      isAbort: false,
+      isDisconnect: false,
+      isError: false,
+      finishReason: 'stop',
+    });
+
+    await waitFor(() => {
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['conversations'] });
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['messages', 'conversation_server_1'] });
+    });
+    expect(onConversationResolved).toHaveBeenCalledWith('conversation_server_1');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/chat', {
+      method: 'POST',
+    });
   });
 
   it('renders accessible tool execution states and ignores unknown parts', () => {

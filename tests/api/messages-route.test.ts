@@ -9,6 +9,7 @@ const routeMocks = vi.hoisted(() => ({
   conversationFindFirst: vi.fn(),
   messageFindMany: vi.fn(),
   messageCount: vi.fn(),
+  agentRunFindMany: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/current-user', () => ({
@@ -32,6 +33,9 @@ vi.mock('@/lib/db/prisma', () => ({
       findMany: routeMocks.messageFindMany,
       count: routeMocks.messageCount,
     },
+    agentRun: {
+      findMany: routeMocks.agentRunFindMany,
+    },
   },
 }));
 
@@ -45,6 +49,7 @@ describe('messages route', () => {
     routeMocks.conversationFindFirst.mockReset();
     routeMocks.messageFindMany.mockReset();
     routeMocks.messageCount.mockReset();
+    routeMocks.agentRunFindMany.mockReset();
 
     routeMocks.getCurrentUser.mockResolvedValue({
       id: 'user_1',
@@ -59,6 +64,7 @@ describe('messages route', () => {
     });
     routeMocks.conversationFindFirst.mockResolvedValue({ id: 'conversation_1' });
     routeMocks.messageCount.mockResolvedValue(1);
+    routeMocks.agentRunFindMany.mockResolvedValue([]);
   });
 
   it('returns safe public message metadata without exposing internal persisted payloads', async () => {
@@ -130,6 +136,84 @@ describe('messages route', () => {
             metadata: {
               activeAgentName: 'Knowledge agent',
               agent: 'Knowledge agent',
+              model: 'gpt-4.1-mini',
+            },
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 50,
+        order: 'asc',
+      },
+    });
+  });
+
+  it('enriches historical assistant messages from agent runs without exposing internal tool payloads', async () => {
+    routeMocks.messageFindMany.mockResolvedValue([
+      {
+        id: 'message_legacy_1',
+        role: 'ASSISTANT',
+        content: 'Legacy transcript restored.',
+        citations: null,
+        toolCalls: null,
+        metadata: {
+          activeAgentName: 'Knowledge agent',
+          agentRunId: 'run_legacy_1',
+          requestId: 'req_hidden',
+        },
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ]);
+    routeMocks.agentRunFindMany.mockResolvedValue([
+      {
+        id: 'run_legacy_1',
+        model: 'gpt-4.1-mini',
+        metadata: {
+          activeAgentName: 'Knowledge agent',
+          requestId: 'req_hidden',
+        },
+        toolCalls: [
+          {
+            id: 'tool_call_legacy_1',
+            name: 'retrieve_chunks',
+            status: 'COMPLETED',
+            arguments: { query: 'quarterly report' },
+            result: { chunks: [{ id: 'chunk_hidden' }] },
+          },
+        ],
+      },
+    ]);
+
+    const request = new Request('https://app.example.com/api/messages?conversationId=conversation_1', {
+      headers: {
+        'user-agent': 'vitest',
+        'x-request-id': 'req_messages_legacy',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        items: [
+          {
+            id: 'message_legacy_1',
+            role: 'ASSISTANT',
+            content: 'Legacy transcript restored.',
+            citations: null,
+            toolCalls: [
+              {
+                id: 'tool_call_legacy_1',
+                name: 'retrieve_chunks',
+                status: 'COMPLETED',
+              },
+            ],
+            metadata: {
+              activeAgentName: 'Knowledge agent',
               model: 'gpt-4.1-mini',
             },
             createdAt: '2026-01-01T00:00:00.000Z',
