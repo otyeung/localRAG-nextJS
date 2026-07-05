@@ -20,6 +20,8 @@ type HealthSnapshot = {
 
 type ApiResponse<T> = { data: T };
 
+type HealthResponseBody = ApiResponse<Record<string, unknown>>;
+
 type HealthCheck = {
   name: string;
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -56,6 +58,44 @@ function normalizeServices(value: unknown): HealthService[] {
   return [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isHealthResponseBody(body: unknown): body is HealthResponseBody {
+  return isRecord(body) && isRecord(body.data);
+}
+
+function normalizeHealthSnapshot(body: HealthResponseBody): HealthSnapshot {
+  const data = body.data;
+  const status =
+    data.status === 'healthy' || data.status === 'degraded' || data.status === 'unhealthy' || data.status === 'pending'
+      ? data.status
+      : null;
+
+  if (!status) {
+    throw new Error('Health response was malformed.');
+  }
+
+  return {
+    supported: true,
+    status,
+    label: status === 'healthy' ? 'Healthy' : status === 'degraded' ? 'Degraded' : status === 'unhealthy' ? 'Unhealthy' : 'Available',
+    lastCheckedAt: typeof data.checkedAt === 'string' ? data.checkedAt : undefined,
+    version: typeof data.version === 'string' ? data.version : undefined,
+    uptimeSeconds: typeof data.uptimeSeconds === 'number' ? data.uptimeSeconds : undefined,
+    services: normalizeServices(data.checks ?? data.services),
+  };
+}
+
+function normalizeErrorMessage(body: unknown) {
+  if (isRecord(body) && isRecord(body.error) && typeof body.error.message === 'string' && body.error.message) {
+    return body.error.message;
+  }
+
+  return 'Unable to load system health.';
+}
+
 async function requestHealth(): Promise<HealthSnapshot> {
   const response = await fetch('/api/health');
 
@@ -68,30 +108,25 @@ async function requestHealth(): Promise<HealthSnapshot> {
     };
   }
 
-  const body = (await response.json().catch(() => null)) as
-    | ApiResponse<Record<string, unknown>>
-    | { error?: { message?: string } }
-    | null;
+  const body = (await response.json().catch(() => null)) as unknown;
 
-  if (!response.ok) {
-    throw new Error(body && 'error' in body ? body.error?.message ?? 'Unable to load system health.' : 'Unable to load system health.');
+  if (response.status === 503) {
+    if (isHealthResponseBody(body)) {
+      return normalizeHealthSnapshot(body);
+    }
+
+    throw new Error('Health response was malformed.');
   }
 
-  const data = (body as ApiResponse<Record<string, unknown>>).data;
-  const status =
-    data.status === 'healthy' || data.status === 'degraded' || data.status === 'unhealthy' || data.status === 'pending'
-      ? data.status
-      : 'pending';
+  if (!response.ok) {
+    throw new Error(normalizeErrorMessage(body));
+  }
 
-  return {
-    supported: true,
-    status,
-    label: status === 'healthy' ? 'Healthy' : status === 'degraded' ? 'Degraded' : status === 'unhealthy' ? 'Unhealthy' : 'Available',
-    lastCheckedAt: typeof data.checkedAt === 'string' ? data.checkedAt : undefined,
-    version: typeof data.version === 'string' ? data.version : undefined,
-    uptimeSeconds: typeof data.uptimeSeconds === 'number' ? data.uptimeSeconds : undefined,
-    services: normalizeServices(data.checks ?? data.services),
-  };
+  if (!isHealthResponseBody(body)) {
+    throw new Error('Health response was malformed.');
+  }
+
+  return normalizeHealthSnapshot(body);
 }
 
 export type { HealthService, HealthSnapshot };
