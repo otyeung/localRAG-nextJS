@@ -20,6 +20,23 @@ describe('summarizeLiveCorpusPreflight', () => {
     });
   });
 
+  it('treats a missing or dummy openai key as an unavailable live dependency', () => {
+    expect(
+      summarizeLiveCorpusPreflight({
+        liveCorpusEnabled: true,
+        dependencyReadiness: {
+          n8nReady: true,
+          qdrantReady: true,
+          databaseReady: true,
+          openAiReady: false,
+        },
+      }),
+    ).toEqual({
+      shouldRun: false,
+      skipReason: 'Required live dependencies are unavailable: openai.',
+    });
+  });
+
   it('allows the live corpus suite to run when every dependency is healthy', () => {
     expect(
       summarizeLiveCorpusPreflight({

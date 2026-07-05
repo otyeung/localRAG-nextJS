@@ -1,12 +1,10 @@
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 import { corpusQuestions } from '@/tests/fixtures/corpus-questions';
+import { hasUsableLiveOpenAiKey } from '@/tests/support/live-openai-key';
 
 const liveCorpusEnabled = process.env.LOCALRAG_LIVE_CORPUS_TESTS === '1';
-const liveOpenAiConfigured =
-  typeof process.env.OPENAI_API_KEY === 'string' &&
-  process.env.OPENAI_API_KEY.trim().length > 0 &&
-  process.env.OPENAI_API_KEY !== 'sk-test';
+const liveOpenAiConfigured = hasUsableLiveOpenAiKey(process.env.OPENAI_API_KEY);
 
 test.describe.configure({ mode: 'serial' });
 
@@ -82,6 +80,13 @@ async function mockShellApis(
   page: Page,
   getMessages: () => PersistedMessage[],
   getConversations: () => PersistedConversation[],
+  {
+    getExpectedMessagesConversationId,
+    onMessagesRequest,
+  }: {
+    getExpectedMessagesConversationId?: () => string | null;
+    onMessagesRequest?: (conversationId: string | null) => void;
+  } = {},
 ) {
   await page.route('**/api/health', (route) =>
     json(route, {
@@ -106,13 +111,30 @@ async function mockShellApis(
   );
 
   await page.route('**/api/messages**', (route) =>
-    json(route, {
-      items: getMessages(),
-      total: getMessages().length,
-      page: 1,
-      pageSize: 100,
-      order: 'asc',
-    }),
+    {
+      const url = new URL(route.request().url());
+      const conversationId = url.searchParams.get('conversationId');
+      const expectedConversationId = getExpectedMessagesConversationId?.() ?? null;
+      onMessagesRequest?.(conversationId);
+
+      if (expectedConversationId && conversationId !== expectedConversationId) {
+        return json(route, {
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 100,
+          order: 'asc',
+        });
+      }
+
+      return json(route, {
+        items: getMessages(),
+        total: getMessages().length,
+        page: 1,
+        pageSize: 100,
+        order: 'asc',
+      });
+    },
   );
 
   await page.route('**/api/documents**', (route) =>
@@ -252,10 +274,18 @@ async function findSeededDocumentCard(page: Page, fileName: string) {
 test('stops a pending generation and retries the latest response with grounded output', async ({ page }) => {
   let persistedMessages: PersistedMessage[] = [];
   let persistedConversations: PersistedConversation[] = [];
+  let expectedMessagesConversationId: string | null = null;
+  const observedMessageConversationIds: Array<string | null> = [];
   await mockShellApis(
     page,
     () => persistedMessages,
     () => persistedConversations,
+    {
+      getExpectedMessagesConversationId: () => expectedMessagesConversationId,
+      onMessagesRequest: (conversationId) => {
+        observedMessageConversationIds.push(conversationId);
+      },
+    },
   );
   await installMockChatTransport(page);
   await page.goto('/');
@@ -318,6 +348,7 @@ test('stops a pending generation and retries the latest response with grounded o
       activeAgentName: 'DocumentAgent',
     },
   ];
+  expectedMessagesConversationId = persistedConversations[0]?.id ?? null;
 
   await page.getByTestId('retry-latest-response').click();
 
@@ -334,7 +365,11 @@ test('stops a pending generation and retries the latest response with grounded o
 
   const persistedAssistant = await captureAssistantMessageSnapshot(assistantMessage);
 
+  const messageRequestCountBeforeReload = observedMessageConversationIds.length;
   await page.reload();
+  await expect
+    .poll(() => observedMessageConversationIds.slice(messageRequestCountBeforeReload))
+    .toContain(expectedMessagesConversationId!);
 
   await expectPersistedAssistantMessage(
     page,
@@ -409,6 +444,7 @@ test('answers seeded corpus questions with citations and survives reload', async
   let persistedRequiredFragment: string | null = null;
 
   for (const corpusQuestion of corpusQuestions) {
+    const assistantMessageCountBefore = await page.getByTestId('assistant-message').count();
     const requestPromise = page.waitForResponse(
       (response) => response.url().includes('/api/chat') && response.request().method() === 'POST',
       { timeout: 120_000 },
@@ -421,12 +457,18 @@ test('answers seeded corpus questions with citations and survives reload', async
     await expect(page.getByText('Streaming answer')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('Ready')).toBeVisible({ timeout: 180_000 });
     await expect(page.getByRole('button', { name: 'Stop generation' })).toBeDisabled();
-
-    for (const fragment of corpusQuestion.requiredAnswerFragments) {
-      await expect(page.getByText(new RegExp(fragment, 'i'))).toBeVisible({ timeout: 120_000 });
-    }
+    await expect(page.getByTestId('assistant-message')).toHaveCount(assistantMessageCountBefore + 1, {
+      timeout: 120_000,
+    });
 
     const latestAssistantMessage = page.getByTestId('assistant-message').last();
+    const latestAssistantContent = latestAssistantMessage.getByTestId('message-content');
+    await expect(latestAssistantMessage).toBeVisible({ timeout: 120_000 });
+
+    for (const fragment of corpusQuestion.requiredAnswerFragments) {
+      await expect(latestAssistantContent).toContainText(fragment, { timeout: 120_000 });
+    }
+
     await expect(latestAssistantMessage.getByTestId('message-citations')).toContainText(corpusQuestion.fileName, {
       timeout: 120_000,
     });

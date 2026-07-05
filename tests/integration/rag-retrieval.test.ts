@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import { corpusQuestions } from '@/tests/fixtures/corpus-questions';
 import { summarizeLiveCorpusPreflight } from '@/tests/integration/support/live-corpus-preflight';
+import { hasUsableLiveOpenAiKey } from '@/tests/support/live-openai-key';
 
 const liveCorpusEnabled = process.env.LOCALRAG_LIVE_CORPUS_TESTS === '1';
 
@@ -37,14 +38,6 @@ async function canQueryDatabase(connectionString: string | undefined) {
   }
 }
 
-function hasLiveOpenAiKey() {
-  return (
-    typeof process.env.OPENAI_API_KEY === 'string' &&
-    process.env.OPENAI_API_KEY.trim().length > 0 &&
-    process.env.OPENAI_API_KEY !== 'sk-test'
-  );
-}
-
 const liveCorpusDependencyReadiness = liveCorpusEnabled
   ? await (async () => {
       const [n8nReady, qdrantReady, databaseReady] = await Promise.all([
@@ -57,7 +50,7 @@ const liveCorpusDependencyReadiness = liveCorpusEnabled
         n8nReady,
         qdrantReady,
         databaseReady,
-        openAiReady: hasLiveOpenAiKey(),
+        openAiReady: hasUsableLiveOpenAiKey(process.env.OPENAI_API_KEY),
       };
     })()
   : undefined;

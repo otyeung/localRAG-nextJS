@@ -8,7 +8,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       ...process.env,
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? 'sk-playwright',
+      ...(!process.env.OPENAI_API_KEY && process.env.LOCALRAG_LIVE_CORPUS_TESTS !== '1'
+        ? { OPENAI_API_KEY: 'sk-playwright' }
+        : {}),
       DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://localhost:5432/localrag_nextjs?schema=public',
       N8N_BASE_URL: process.env.N8N_BASE_URL ?? 'http://127.0.0.1:5678',
       N8N_WEBHOOK_SECRET: process.env.N8N_WEBHOOK_SECRET ?? 'playwright-webhook-secret',
