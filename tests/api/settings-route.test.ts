@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const routeMocks = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
   getForUser: vi.fn(),
-  updateForUser: vi.fn(),
-  recordAudit: vi.fn(),
+  updateForUserWithAudit: vi.fn(),
   rateLimit: vi.fn(),
 }));
 
@@ -15,18 +14,12 @@ vi.mock('@/lib/auth/current-user', () => ({
 vi.mock('@/lib/services/settings-service', () => ({
   SettingsService: class {
     getForUser = routeMocks.getForUser;
-    updateForUser = routeMocks.updateForUser;
+    updateForUserWithAudit = routeMocks.updateForUserWithAudit;
   },
   defaultUserSettings: {
     theme: 'system',
     model: 'gpt-4.1-mini',
     showReasoningMetadata: true,
-  },
-}));
-
-vi.mock('@/lib/services/audit-service', () => ({
-  AuditService: class {
-    record = routeMocks.recordAudit;
   },
 }));
 
@@ -48,12 +41,11 @@ describe('settings route', () => {
       model: 'gpt-4.1-mini',
       showReasoningMetadata: true,
     });
-    routeMocks.updateForUser.mockResolvedValue({
+    routeMocks.updateForUserWithAudit.mockResolvedValue({
       theme: 'dark',
       model: 'gpt-4.1-mini',
       showReasoningMetadata: false,
     });
-    routeMocks.recordAudit.mockResolvedValue(undefined);
     routeMocks.rateLimit.mockResolvedValue({
       allowed: true,
       remaining: 9,
@@ -81,9 +73,15 @@ describe('settings route', () => {
     });
     expect(routeMocks.getCurrentUser).toHaveBeenCalledWith(request);
     expect(routeMocks.getForUser).toHaveBeenCalledWith('user_1');
+    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+      'settings:get:user_1:unknown',
+      expect.objectContaining({
+        namespace: 'settings-api',
+      }),
+    );
   });
 
-  it('updates settings and records an audit event', async () => {
+  it('updates settings atomically with an audit event', async () => {
     const request = new Request('https://app.example.com/api/settings', {
       method: 'PATCH',
       headers: {
@@ -109,24 +107,24 @@ describe('settings route', () => {
         showReasoningMetadata: false,
       },
     });
-    expect(routeMocks.updateForUser).toHaveBeenCalledWith('user_1', {
-      theme: 'dark',
-      showReasoningMetadata: false,
-    });
-    expect(routeMocks.recordAudit).toHaveBeenCalledWith({
-      userId: 'user_1',
-      action: 'settings.updated',
-      entityType: 'settings',
-      entityId: 'user_1',
-      requestId: 'req_patch',
-      metadata: {
+    expect(routeMocks.updateForUserWithAudit).toHaveBeenCalledWith(
+      'user_1',
+      {
         theme: 'dark',
-        model: 'gpt-4.1-mini',
         showReasoningMetadata: false,
       },
-      ipAddress: 'unknown',
-      userAgent: 'vitest',
-    });
+      {
+        requestId: 'req_patch',
+        ipAddress: 'unknown',
+        userAgent: 'vitest',
+      },
+    );
+    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+      'settings:patch:user_1:unknown',
+      expect.objectContaining({
+        namespace: 'settings-api',
+      }),
+    );
   });
 
   it('rejects cross-origin settings updates', async () => {

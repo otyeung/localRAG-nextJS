@@ -113,21 +113,91 @@ describe('SettingsService', () => {
       model: 'gpt-4.1',
       showReasoningMetadata: true,
     });
+    expect(db.settings.findUnique).not.toHaveBeenCalled();
     expect(db.settings.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: 'user_1' },
         update: {
-          theme: 'dark',
           model: 'gpt-4.1',
-          showReasoningMetadata: true,
         },
         create: {
           userId: 'user_1',
-          theme: 'dark',
+          theme: 'system',
           model: 'gpt-4.1',
           showReasoningMetadata: true,
         },
       }),
     );
+  });
+
+  it('updates settings and audit logging in one transaction', async () => {
+    const tx = {
+      settings: {
+        upsert: vi.fn().mockResolvedValue({
+          theme: 'dark',
+          model: 'gpt-4.1-mini',
+          showReasoningMetadata: true,
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      settings: {
+        findUnique: vi.fn(),
+        upsert: vi.fn(),
+      },
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new SettingsService(db as never, db as never);
+
+    await expect(
+      service.updateForUserWithAudit(
+        'user_1',
+        { theme: 'dark' },
+        {
+          requestId: 'req_1',
+          ipAddress: '127.0.0.1',
+          userAgent: 'vitest',
+        },
+      ),
+    ).resolves.toEqual({
+      theme: 'dark',
+      model: 'gpt-4.1-mini',
+      showReasoningMetadata: true,
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(tx.settings.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user_1' },
+        update: {
+          theme: 'dark',
+        },
+        create: {
+          userId: 'user_1',
+          theme: 'dark',
+          model: 'gpt-4.1-mini',
+          showReasoningMetadata: true,
+        },
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'settings.updated',
+        entityType: 'settings',
+        entityId: 'user_1',
+        requestId: 'req_1',
+        metadata: {
+          theme: 'dark',
+          model: 'gpt-4.1-mini',
+          showReasoningMetadata: true,
+        },
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+      },
+    });
   });
 });

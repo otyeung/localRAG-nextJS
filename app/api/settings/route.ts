@@ -6,11 +6,9 @@ import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { getRequestContext } from '@/lib/http/request-context';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { AuditService } from '@/lib/services/audit-service';
 import { SettingsService } from '@/lib/services/settings-service';
 
 const settingsService = new SettingsService();
-const auditService = new AuditService();
 
 const settingsPatchSchema = z
   .object({
@@ -40,8 +38,8 @@ export async function GET(request: Request): Promise<Response> {
   const requestContext = getRequestContext(request);
 
   try {
-    await enforceRateLimit(`settings:get:${requestContext.ipAddress}`);
     const user = await getCurrentUser(request);
+    await enforceRateLimit(`settings:get:${user.id}:${requestContext.ipAddress}`);
     const settings = await settingsService.getForUser(user.id);
 
     return jsonOk(settings);
@@ -55,7 +53,6 @@ export async function PATCH(request: Request): Promise<Response> {
 
   try {
     assertSameOrigin(request);
-    await enforceRateLimit(`settings:patch:${requestContext.ipAddress}`);
 
     let json: unknown;
     try {
@@ -70,15 +67,9 @@ export async function PATCH(request: Request): Promise<Response> {
     }
 
     const user = await getCurrentUser(request);
-    const settings = await settingsService.updateForUser(user.id, parsed.data);
-
-    await auditService.record({
-      userId: user.id,
-      action: 'settings.updated',
-      entityType: 'settings',
-      entityId: user.id,
+    await enforceRateLimit(`settings:patch:${user.id}:${requestContext.ipAddress}`);
+    const settings = await settingsService.updateForUserWithAudit(user.id, parsed.data, {
       requestId: requestContext.requestId,
-      metadata: settings,
       ipAddress: requestContext.ipAddress,
       userAgent: requestContext.userAgent,
     });
