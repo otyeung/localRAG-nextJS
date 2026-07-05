@@ -183,7 +183,7 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
               onClick={() => void retryLatest()}
             >
               <Sparkles className="h-4 w-4" />
-              Retry latest response
+              Retry response
             </button>
           </div>
         </div>

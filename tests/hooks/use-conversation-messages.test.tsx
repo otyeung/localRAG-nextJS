@@ -49,7 +49,15 @@ describe('useConversationMessages', () => {
                     documentName: 'Quarterly Report',
                   },
                 ],
-                toolCalls: null,
+                toolCalls: [
+                  {
+                    id: 'tool_call_1',
+                    name: 'retrieve_chunks',
+                    status: 'COMPLETED',
+                    arguments: { query: 'quarterly report' },
+                    result: { chunks: [{ id: 'chunk_1' }] },
+                  },
+                ],
                 metadata: {
                   activeAgentName: 'Knowledge agent',
                   model: 'gpt-4.1-mini',
@@ -88,6 +96,14 @@ describe('useConversationMessages', () => {
         role: 'assistant',
         parts: [
           { type: 'text', text: 'Transcript restored.' },
+          {
+            type: 'dynamic-tool',
+            toolName: 'retrieve_chunks',
+            toolCallId: 'tool_call_1',
+            state: 'output-available',
+            input: {},
+            output: {},
+          },
           { type: 'source-document', sourceId: 'document_1', mediaType: 'text/plain', title: 'Quarterly Report' },
         ],
         metadata: {

@@ -68,7 +68,22 @@ describe('messages route', () => {
         role: 'ASSISTANT',
         content: 'Transcript restored.',
         citations: null,
-        toolCalls: null,
+        toolCalls: [
+          {
+            id: 'tool_call_1',
+            name: 'retrieve_chunks',
+            status: 'COMPLETED',
+            arguments: { query: 'quarterly report' },
+            result: { chunks: [{ id: 'chunk_1' }] },
+          },
+          {
+            id: 'tool_call_2',
+            name: 'search_documents',
+            status: 'FAILED',
+            errorMessage: 'Lookup failed.',
+            metadata: { requestId: 'hidden' },
+          },
+        ],
         metadata: {
           activeAgentName: 'Knowledge agent',
           agent: 'Knowledge agent',
@@ -99,7 +114,19 @@ describe('messages route', () => {
             role: 'ASSISTANT',
             content: 'Transcript restored.',
             citations: null,
-            toolCalls: null,
+            toolCalls: [
+              {
+                id: 'tool_call_1',
+                name: 'retrieve_chunks',
+                status: 'COMPLETED',
+              },
+              {
+                id: 'tool_call_2',
+                name: 'search_documents',
+                status: 'FAILED',
+                errorMessage: 'Lookup failed.',
+              },
+            ],
             metadata: {
               activeAgentName: 'Knowledge agent',
               agent: 'Knowledge agent',

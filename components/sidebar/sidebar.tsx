@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DatabaseZap, MessageSquarePlus, Settings2, ShieldCheck, UserRound } from 'lucide-react';
 
 import { StatusBadge } from '@/components/common/status-badge';
@@ -41,10 +41,37 @@ export function Sidebar({
   healthLabel: string;
 }) {
   const [searchValue, setSearchValue] = useState(conversationSearchValue);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSearchValue(conversationSearchValue);
   }, [conversationSearchValue]);
+
+  useEffect(() => {
+    if (!isUserMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isUserMenuOpen]);
 
   const visibleConversations = useMemo(() => {
     const query = searchValue.trim().toLowerCase();
@@ -158,18 +185,66 @@ export function Sidebar({
         <p className="text-sm text-[color:var(--text-muted)]">
           Queue, indexing, and orchestration telemetry stays visible here while you work.
         </p>
-        <button
-          type="button"
-          className="flex w-full items-center gap-3 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] px-4 py-3 text-left"
-        >
-          <span className="rounded-full border border-[color:var(--border-soft)] p-2 text-[color:var(--text-muted)]">
-            <UserRound className="h-4 w-4" />
-          </span>
-          <span>
-            <span className="block text-sm font-medium text-[color:var(--text-strong)]">User Menu</span>
-            <span className="block text-xs text-[color:var(--text-dim)]">Anonymous analyst session</span>
-          </span>
-        </button>
+        <div ref={userMenuRef} className="relative">
+          <button
+            type="button"
+            aria-label="User Menu"
+            aria-haspopup="menu"
+            aria-expanded={isUserMenuOpen}
+            className="flex w-full items-center gap-3 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] px-4 py-3 text-left"
+            onClick={() => setIsUserMenuOpen((current) => !current)}
+          >
+            <span className="rounded-full border border-[color:var(--border-soft)] p-2 text-[color:var(--text-muted)]">
+              <UserRound className="h-4 w-4" />
+            </span>
+            <span>
+              <span className="block text-sm font-medium text-[color:var(--text-strong)]">User Menu</span>
+              <span className="block text-xs text-[color:var(--text-dim)]">Anonymous analyst session</span>
+            </span>
+          </button>
+          {isUserMenuOpen ? (
+            <div
+              role="menu"
+              aria-label="User Menu"
+              className="absolute bottom-[calc(100%+0.75rem)] left-0 z-10 w-full rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-2 shadow-[var(--shadow-panel)]"
+            >
+              <div className="rounded-xl px-3 py-2">
+                <p className="text-sm font-medium text-[color:var(--text-strong)]">Anonymous analyst session</p>
+                <p className="mt-1 text-xs text-[color:var(--text-dim)]">Auth provider integration is planned for a later task.</p>
+              </div>
+              <div className="my-2 h-px bg-[color:var(--border-soft)]" />
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-strong)] transition hover:bg-[color:var(--panel-subtle)]"
+                onClick={() => {
+                  setIsUserMenuOpen(false);
+                  onSettings?.();
+                }}
+              >
+                Open settings
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="mt-1 flex w-full rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-strong)] transition hover:bg-[color:var(--panel-subtle)]"
+                onClick={() => {
+                  setIsUserMenuOpen(false);
+                }}
+              >
+                View system status
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled
+                className="mt-1 flex w-full cursor-not-allowed rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-dim)] opacity-70"
+              >
+                Sign in coming soon
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </aside>
   );

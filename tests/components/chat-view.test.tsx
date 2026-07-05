@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'ai';
@@ -82,7 +82,7 @@ describe('ChatView', () => {
     expect(screen.getByLabelText('Message input')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop generation' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry response' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Retry response' }).length).toBeGreaterThan(0);
   });
 
   it('disables retry latest response when no transcript is available', () => {
@@ -99,7 +99,7 @@ describe('ChatView', () => {
 
     render(createElement(ChatView, { initialConversationId: null }));
 
-    expect(screen.getByRole('button', { name: 'Retry latest response' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry response' })).toBeDisabled();
   });
 
   it('renders assistant metadata, markdown tables, and citations', () => {
@@ -113,17 +113,19 @@ describe('ChatView', () => {
   });
 
   it('hydrates saved transcripts into useChat messages for an existing conversation', async () => {
-    const setMessages = vi.fn();
+    useChatMock.mockImplementation(() => {
+      const [hydratedMessages, setHydratedMessages] = useState<UIMessage[]>([]);
 
-    useChatMock.mockReturnValue({
-      messages: [],
-      setMessages,
-      sendMessage: vi.fn(),
-      regenerate: vi.fn(),
-      stop: vi.fn(),
-      clearError: vi.fn(),
-      status: 'ready',
-      error: undefined,
+      return {
+        messages: hydratedMessages,
+        setMessages: setHydratedMessages,
+        sendMessage: vi.fn(),
+        regenerate: vi.fn(),
+        stop: vi.fn(),
+        clearError: vi.fn(),
+        status: 'ready',
+        error: undefined,
+      };
     });
     useConversationMessagesMock.mockReturnValue({
       data: [
@@ -138,6 +140,12 @@ describe('ChatView', () => {
           role: 'assistant',
           parts: [
             { type: 'text', text: 'Transcript restored.' },
+            {
+              type: 'dynamic-tool',
+              toolName: 'retrieve_chunks',
+              toolCallId: 'tool_1',
+              state: 'output-available',
+            },
             { type: 'source-document', sourceId: 'document_1', title: 'Quarterly Report' },
           ],
           metadata: { createdAt: '2026-01-01T00:00:30.000Z' },
@@ -150,25 +158,8 @@ describe('ChatView', () => {
 
     render(createElement(ChatView, { initialConversationId: 'conversation_saved' }));
 
-    await waitFor(() =>
-      expect(setMessages).toHaveBeenCalledWith([
-        {
-          id: 'persisted_user',
-          role: 'user',
-          parts: [{ type: 'text', text: 'Load the saved transcript.' }],
-          metadata: { createdAt: '2026-01-01T00:00:00.000Z' },
-        },
-        {
-          id: 'persisted_assistant',
-          role: 'assistant',
-          parts: [
-            { type: 'text', text: 'Transcript restored.' },
-            { type: 'source-document', sourceId: 'document_1', title: 'Quarterly Report' },
-          ],
-          metadata: { createdAt: '2026-01-01T00:00:30.000Z' },
-        },
-      ]),
-    );
+    await waitFor(() => expect(screen.getByText('Transcript restored.')).toBeInTheDocument());
+    expect(screen.getByLabelText('Tool retrieve chunks completed')).toBeInTheDocument();
   });
 
   it('does not overwrite an active streaming transcript when saved messages finish loading', async () => {

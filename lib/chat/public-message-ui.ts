@@ -5,6 +5,13 @@ type PersistedCitation = {
   documentName?: unknown;
 };
 
+type PersistedToolCall = {
+  id?: unknown;
+  name?: unknown;
+  status?: unknown;
+  errorMessage?: unknown;
+};
+
 export type PublicMessageRecord = {
   id: string;
   role: string;
@@ -20,6 +27,13 @@ export type PublicMessageMetadata = {
   model?: string;
   agent?: string;
   activeAgentName?: string;
+};
+
+export type PublicToolCallRecord = {
+  id: string;
+  name: string;
+  status: 'STARTED' | 'COMPLETED' | 'FAILED';
+  errorMessage?: string;
 };
 
 export type ChatUiMessage = UIMessage<{
@@ -65,6 +79,42 @@ function toCitationParts(citations: unknown): ChatUiMessage['parts'] {
   });
 }
 
+function toToolParts(toolCalls: unknown): ChatUiMessage['parts'] {
+  const safeToolCalls = sanitizePublicToolCalls(toolCalls);
+
+  return safeToolCalls.map((toolCall) => {
+    if (toolCall.status === 'FAILED' && toolCall.errorMessage) {
+      return {
+        type: 'dynamic-tool' as const,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        state: 'output-error' as const,
+        input: {},
+        errorText: toolCall.errorMessage,
+      };
+    }
+
+    if (toolCall.status === 'COMPLETED') {
+      return {
+        type: 'dynamic-tool' as const,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        state: 'output-available' as const,
+        input: {},
+        output: {},
+      };
+    }
+
+    return {
+      type: 'dynamic-tool' as const,
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      state: 'input-available' as const,
+      input: {},
+    };
+  });
+}
+
 export function sanitizePublicMessageMetadata(metadata: unknown): PublicMessageMetadata | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return null;
@@ -88,6 +138,40 @@ export function sanitizePublicMessageMetadata(metadata: unknown): PublicMessageM
   return Object.keys(safeMetadata).length > 0 ? safeMetadata : null;
 }
 
+export function sanitizePublicToolCalls(toolCalls: unknown): PublicToolCallRecord[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+
+  return toolCalls.flatMap((toolCall) => {
+    if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) {
+      return [];
+    }
+
+    const record = toolCall as PersistedToolCall;
+    if (typeof record.id !== 'string' || record.id.trim().length === 0) {
+      return [];
+    }
+    if (typeof record.name !== 'string' || record.name.trim().length === 0) {
+      return [];
+    }
+    if (record.status !== 'STARTED' && record.status !== 'COMPLETED' && record.status !== 'FAILED') {
+      return [];
+    }
+
+    return [
+      {
+        id: record.id,
+        name: record.name,
+        status: record.status,
+        ...(typeof record.errorMessage === 'string' && record.errorMessage.trim().length > 0
+          ? { errorMessage: record.errorMessage }
+          : {}),
+      },
+    ];
+  });
+}
+
 export function toChatUiMessage(message: PublicMessageRecord): ChatUiMessage {
   const parts: ChatUiMessage['parts'] = [];
   const safeMetadata = sanitizePublicMessageMetadata(message.metadata);
@@ -99,6 +183,7 @@ export function toChatUiMessage(message: PublicMessageRecord): ChatUiMessage {
     });
   }
 
+  parts.push(...toToolParts(message.toolCalls));
   parts.push(...toCitationParts(message.citations));
 
   return {

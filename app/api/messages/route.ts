@@ -8,7 +8,7 @@ import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { sanitizePublicMessageMetadata } from '@/lib/chat/public-message-ui';
+import { sanitizePublicMessageMetadata, sanitizePublicToolCalls } from '@/lib/chat/public-message-ui';
 
 const messagesQuerySchema = z.object({
   conversationId: z.string().trim().min(1),
@@ -81,7 +81,7 @@ export async function GET(request: Request): Promise<Response> {
         role: message.role,
         content: message.content,
         citations: message.citations,
-        toolCalls: message.toolCalls,
+        toolCalls: sanitizePublicToolCalls(message.toolCalls),
         metadata: sanitizePublicMessageMetadata(message.metadata),
         createdAt: message.createdAt.toISOString(),
         updatedAt: message.updatedAt.toISOString(),

@@ -1,11 +1,15 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Sidebar } from '@/components/sidebar/sidebar';
 
 describe('Sidebar', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it('renders stable navigation labels, filters conversations, and requests more results', () => {
     const onConversationSelect = vi.fn();
     const onLoadMore = vi.fn();
@@ -65,5 +69,32 @@ describe('Sidebar', () => {
 
     expect(onLoadMore).toHaveBeenCalledTimes(1);
     expect(screen.getByText('1 of 45')).toBeInTheDocument();
+  });
+
+  it('opens the user menu with accessible actions', () => {
+    render(
+      createElement(Sidebar, {
+        activeConversationId: null,
+        conversations: [],
+        conversationSearchValue: '',
+        onConversationSearchChange: vi.fn(),
+        onConversationSelect: vi.fn(),
+        onNewChat: vi.fn(),
+        onConversationRename: vi.fn(),
+        onConversationDelete: vi.fn(),
+        onKnowledgeBase: vi.fn(),
+        onSettings: vi.fn(),
+        healthLabel: 'Healthy',
+      }),
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'User Menu' })[0]);
+
+    const menu = screen.getByRole('menu');
+
+    expect(menu).toBeInTheDocument();
+    expect(within(menu).getByText('Anonymous analyst session')).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Open settings' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'View system status' })).toBeInTheDocument();
   });
 });
