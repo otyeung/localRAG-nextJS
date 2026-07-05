@@ -11,9 +11,18 @@ vi.mock('@/lib/db/prisma', () => ({
   },
 }));
 
+import { verifyAnonymousCookieValue } from '@/lib/auth/anonymous-provider';
+import {
+  createSeedCorpusAnonymousCookieValue,
+  SEED_CORPUS_USER_FINGERPRINT,
+} from '@/lib/testing/seed-corpus-user';
 import { seedCorpus } from '@/scripts/seed-corpus';
 
 describe('seedCorpus', () => {
+  it('creates a signed anonymous cookie for the seeded corpus user', () => {
+    expect(verifyAnonymousCookieValue(createSeedCorpusAnonymousCookieValue())).toBe(SEED_CORPUS_USER_FINGERPRINT);
+  });
+
   it('reuses ready documents and ingests missing corpus files through the upload service', async () => {
     const findReadyDocumentByHash = vi
       .fn()

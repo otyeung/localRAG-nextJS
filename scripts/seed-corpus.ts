@@ -10,9 +10,9 @@ import { prisma } from '@/lib/db/prisma';
 import { UserRepository } from '@/lib/repositories/user-repository';
 import { UploadService, type UploadResult } from '@/lib/services/upload-service';
 import { WorkflowService, type WorkflowExecutionDto } from '@/lib/services/workflow-service';
+import { SEED_CORPUS_USER_FINGERPRINT } from '@/lib/testing/seed-corpus-user';
 
 const corpusFiles = ['1706.03762v7.pdf', 'cymbal-starlight-2024.pdf'] as const;
-const SEED_USER_FINGERPRINT = 'seed-corpus-local-user';
 
 function hashFile(path: string): string {
   const hash = createHash('sha256');
@@ -117,7 +117,7 @@ export async function seedCorpus(dependencies: SeedCorpusDependencies = {}): Pro
   const uploadService = dependencies.uploadService ?? new UploadService();
   const workflowService = dependencies.workflowService ?? new WorkflowService();
   const fingerprintHash =
-    (await (dependencies.createFingerprintHash ?? createAnonymousFingerprintHash)(SEED_USER_FINGERPRINT));
+    (await (dependencies.createFingerprintHash ?? createAnonymousFingerprintHash)(SEED_CORPUS_USER_FINGERPRINT));
   const user = await userRepository.findOrCreateAnonymousUser(fingerprintHash);
   const findReadyDocumentByHash =
     dependencies.findReadyDocumentByHash ??

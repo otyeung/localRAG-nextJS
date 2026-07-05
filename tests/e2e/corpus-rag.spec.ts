@@ -48,6 +48,11 @@ type AssistantMessageSnapshot = {
   citationText: string;
 };
 
+type PersistedAssistantExpectation = AssistantMessageSnapshot & {
+  fileName: string;
+  requiredFragment: string;
+};
+
 async function captureAssistantMessageSnapshot(message: Locator): Promise<AssistantMessageSnapshot> {
   const responseText = (await message.getByTestId('message-content').innerText()).trim();
   const responseFragment = responseText.split(/\s+/).slice(0, 12).join(' ');
@@ -74,6 +79,26 @@ async function expectPersistedAssistantMessage(
   await expect(assistantMessage.getByTestId('message-content')).toContainText(requiredFragment, { timeout: 120_000 });
   await expect(assistantMessage.getByTestId('message-content')).toContainText(snapshot.responseText, { timeout: 120_000 });
   await expect(assistantMessage.getByTestId('message-citations')).toContainText(citationText, { timeout: 120_000 });
+}
+
+async function installSeedCorpusAnonymousCookie(page: Page) {
+  process.env.OPENAI_API_KEY ??= 'sk-playwright';
+  process.env.DATABASE_URL ??= 'postgresql://localhost:5432/localrag_nextjs?schema=public';
+  process.env.N8N_BASE_URL ??= 'http://127.0.0.1:5678';
+  process.env.N8N_WEBHOOK_SECRET ??= 'playwright-webhook-secret';
+  process.env.QDRANT_URL ??= 'http://127.0.0.1:6333';
+  process.env.ANONYMOUS_COOKIE_SECRET ??= 'playwright-anonymous-cookie-secret';
+
+  const { getSeedCorpusAnonymousCookie } = await import('@/lib/testing/seed-corpus-user');
+  const cookie = getSeedCorpusAnonymousCookie();
+  await page.context().addCookies([
+    {
+      ...cookie,
+      url: 'http://127.0.0.1:3000',
+      httpOnly: true,
+      sameSite: 'Lax',
+    },
+  ]);
 }
 
 async function mockShellApis(
@@ -379,11 +404,13 @@ test('stops a pending generation and retries the latest response with grounded o
   );
 });
 
-test('answers seeded corpus questions with citations and survives reload', async ({ page, request }) => {
+test('answers seeded corpus questions with citations and survives reload', async ({ page }) => {
   test.skip(!liveCorpusEnabled || !liveOpenAiConfigured, 'Set LOCALRAG_LIVE_CORPUS_TESTS=1 with a live OPENAI_API_KEY to run corpus RAG E2E validation.');
   test.slow();
 
-  const healthResponse = await request.get('/api/health');
+  await installSeedCorpusAnonymousCookie(page);
+
+  const healthResponse = await page.request.get('/api/health');
   if (!healthResponse.ok() && healthResponse.status() !== 503) {
     test.skip(true, 'Live application health endpoint is unavailable.');
   }
@@ -405,7 +432,7 @@ test('answers seeded corpus questions with citations and survives reload', async
     test.skip(true, `Required live dependencies are unavailable: ${unavailableDependencies.join(', ')}.`);
   }
 
-  const documentsResponse = await request.get('/api/documents?page=1&pageSize=100');
+  const documentsResponse = await page.request.get('/api/documents?page=1&pageSize=100');
   if (!documentsResponse.ok()) {
     test.skip(true, 'Live document APIs are unavailable for corpus validation.');
   }
@@ -439,9 +466,7 @@ test('answers seeded corpus questions with citations and survives reload', async
   await page.getByRole('button', { name: 'New Chat' }).click();
   await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible();
 
-  let persistedAssistant: AssistantMessageSnapshot | null = null;
-  let persistedCitation: string | null = null;
-  let persistedRequiredFragment: string | null = null;
+  const persistedAssistants: PersistedAssistantExpectation[] = [];
 
   for (const corpusQuestion of corpusQuestions) {
     const assistantMessageCountBefore = await page.getByTestId('assistant-message').count();
@@ -473,21 +498,22 @@ test('answers seeded corpus questions with citations and survives reload', async
       timeout: 120_000,
     });
 
-    if (corpusQuestion.fileName === 'cymbal-starlight-2024.pdf') {
-      persistedAssistant = await captureAssistantMessageSnapshot(latestAssistantMessage);
-      persistedCitation = corpusQuestion.fileName;
-      persistedRequiredFragment = corpusQuestion.requiredAnswerFragments[0] ?? 'cargo';
-    }
+    persistedAssistants.push({
+      ...(await captureAssistantMessageSnapshot(latestAssistantMessage)),
+      fileName: corpusQuestion.fileName,
+      requiredFragment: corpusQuestion.requiredAnswerFragments[0] ?? corpusQuestion.fileName,
+    });
   }
 
   await page.reload();
-  expect(persistedAssistant).not.toBeNull();
-  expect(persistedCitation).not.toBeNull();
-  expect(persistedRequiredFragment).not.toBeNull();
-  await expectPersistedAssistantMessage(
-    page,
-    persistedAssistant!,
-    persistedRequiredFragment!,
-    persistedCitation!,
-  );
+  expect(persistedAssistants).toHaveLength(corpusQuestions.length);
+
+  for (const persistedAssistant of persistedAssistants) {
+    await expectPersistedAssistantMessage(
+      page,
+      persistedAssistant,
+      persistedAssistant.requiredFragment,
+      persistedAssistant.fileName,
+    );
+  }
 });
