@@ -89,9 +89,29 @@ export function jsonError(error: AppError, requestId: string): Response {
     );
   }
 
+  let rawDetails: unknown;
+  try {
+    rawDetails = error.details;
+  } catch {
+    rawDetails = UNSERIALIZABLE_DETAILS;
+  }
+
+  if (rawDetails === undefined) {
+    return Response.json(
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+          requestId,
+        },
+      },
+      { status: error.status },
+    );
+  }
+
   let details: unknown;
   try {
-    details = serializeDetails(error.details);
+    details = serializeDetails(rawDetails);
   } catch {
     details = UNSERIALIZABLE_DETAILS;
   }

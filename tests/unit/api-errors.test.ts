@@ -27,15 +27,28 @@ describe('json response helpers', () => {
     await expect(response.json()).resolves.toEqual({ data: { ok: true } });
   });
 
-  it('serializes app errors', async () => {
-    const response = jsonError(new AppError('FORBIDDEN', 'Denied', { scope: 'admin' }), 'request-1');
+  it('omits details when app error details are missing', async () => {
+    const response = jsonError(new AppError('BAD_REQUEST', 'Oops'), 'request-1');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Oops',
+        requestId: 'request-1',
+      },
+    });
+  });
+
+  it('serializes app error details', async () => {
+    const response = jsonError(new AppError('FORBIDDEN', 'Denied', { scope: 'admin' }), 'request-1b');
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
       error: {
         code: 'FORBIDDEN',
         message: 'Denied',
-        requestId: 'request-1',
+        requestId: 'request-1b',
         details: { scope: 'admin' },
       },
     });
