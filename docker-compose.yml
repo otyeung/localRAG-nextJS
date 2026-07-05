@@ -35,6 +35,24 @@ services:
     networks:
       - app-network
 
+  qdrant-init:
+    image: node:22.18.0-alpine
+    restart: 'no'
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    working_dir: /workspace
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-1536}
+      QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
+    volumes:
+      - .:/workspace:ro
+    command: ['node', 'scripts/ensure-qdrant-collection.mjs']
+    networks:
+      - app-network
+
   redis:
     image: redis:7.4.5-alpine
     restart: unless-stopped
@@ -52,6 +70,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      qdrant-init:
+        condition: service_completed_successfully
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -104,6 +124,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      qdrant-init:
+        condition: service_completed_successfully
       n8n:
         condition: service_healthy
     environment:

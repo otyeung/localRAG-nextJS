@@ -1,7 +1,7 @@
 {
   "id": "workflow-ingestion",
   "name": "ingestion",
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   },
@@ -118,7 +118,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $input.item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    extractedText: source.extractedText,\n    vector: embedding,\n  },\n};"
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    extractedText: source.extractedText,\n    vector: embedding,\n  },\n};"
       }
     },
     {
@@ -135,7 +135,7 @@
         "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points?wait=true` }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"documentName\":$json.fileName,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
+        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"uploadId\":$json.uploadId,\"documentName\":$json.fileName,\"fileName\":$json.fileName,\"mimeType\":$json.mimeType,\"requestId\":$json.requestId,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
         "options": {}
       }
     },

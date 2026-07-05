@@ -1,7 +1,7 @@
 {
   "id": "workflow-retrieval",
   "name": "retrieval",
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   },
@@ -74,7 +74,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const embedding = items[0]?.json?.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a query vector');\n}\nconst input = $input.first().json;\nconst filter = input.documentIds.length === 0\n  ? undefined\n  : { must: [{ key: 'documentId', match: { any: input.documentIds } }] };\nreturn [{ json: {\n  query: input.query,\n  documentIds: input.documentIds,\n  topK: input.topK,\n  requestId: input.requestId,\n  searchBody: {\n    vector: embedding,\n    limit: input.topK,\n    with_payload: true,\n    score_threshold: 0,\n    filter,\n  },\n} }];"
+        "jsCode": "const embedding = items[0]?.json?.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a query vector');\n}\nconst input = $('Normalize Query').first().json;\nconst filter = input.documentIds.length === 0\n  ? undefined\n  : { must: [{ key: 'documentId', match: { any: input.documentIds } }] };\nreturn [{ json: {\n  query: input.query,\n  conversationId: input.conversationId,\n  documentIds: input.documentIds,\n  topK: input.topK,\n  requestId: input.requestId,\n  searchBody: {\n    vector: embedding,\n    limit: input.topK,\n    with_payload: true,\n    score_threshold: 0,\n    filter,\n  },\n} }];"
       }
     },
     {
@@ -106,7 +106,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const response = items[0]?.json;\nconst results = Array.isArray(response?.result) ? response.result : [];\nreturn [{ json: results.map((match, index) => ({\n  id: String(match.id ?? `${index}`),\n  documentId: String(match.payload?.documentId ?? ''),\n  documentName: String(match.payload?.documentName ?? 'Unknown document'),\n  chunkIndex: Number(match.payload?.chunkIndex ?? 0),\n  content: String(match.payload?.content ?? ''),\n  score: Number(match.score ?? 0),\n  metadata: {\n    tokenCount: match.payload?.tokenCount ?? null,\n    source: 'qdrant',\n  },\n})) }];"
+        "jsCode": "const request = $('Build Search Body').first().json;\nconst response = items[0]?.json;\nconst results = Array.isArray(response?.result) ? response.result : [];\nreturn [{ json: {\n  query: request.query,\n  conversationId: request.conversationId,\n  documentIds: request.documentIds,\n  topK: request.topK,\n  requestId: request.requestId,\n  chunks: results.map((match, index) => ({\n    id: String(match.id ?? `${index}`),\n    documentId: String(match.payload?.documentId ?? ''),\n    documentName: String(match.payload?.documentName ?? match.payload?.fileName ?? 'Unknown document'),\n    chunkIndex: Number(match.payload?.chunkIndex ?? 0),\n    content: String(match.payload?.content ?? ''),\n    score: Number(match.score ?? 0),\n    metadata: {\n      tokenCount: match.payload?.tokenCount ?? null,\n      source: 'qdrant',\n    },\n  })),\n} }];"
       }
     },
     {
