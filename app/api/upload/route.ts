@@ -6,6 +6,7 @@ import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
+import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
 import { UploadValidationService } from '@/lib/services/upload-validation-service';
@@ -34,6 +35,11 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     assertSameOrigin(request);
+    await enforcePreProvisionRouteRateLimit(request, requestContext, {
+      namespace: 'upload-api',
+      action: 'post',
+      errorMessage: 'Too many upload requests.',
+    });
     const user = await getCurrentUser(request);
     const rateLimitResult = await rateLimit(`upload:post:${user.id}:${requestContext.ipAddress}`, {
       namespace: 'upload-api',

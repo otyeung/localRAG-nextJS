@@ -187,6 +187,35 @@ function clearPollFailureMetadata(metadata: unknown): Prisma.InputJsonObject {
   return (Object.keys(record).length > 0 ? record : {}) as Prisma.InputJsonObject;
 }
 
+function areDatesEqual(left: Date | null | undefined, right: Date | null | undefined): boolean {
+  return (left?.getTime() ?? null) === (right?.getTime() ?? null);
+}
+
+function areJsonValuesEqual(left: Prisma.JsonValue | null | undefined, right: Prisma.JsonValue | null | undefined): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function hasWorkflowStateChanged(
+  workflow: WorkflowExecution,
+  nextState: {
+    status: WorkflowStatus;
+    startedAt: Date | null;
+    completedAt: Date | null;
+    errorMessage: string | null;
+    responsePayload: Prisma.JsonValue | null;
+    metadata: Prisma.JsonValue | null;
+  },
+): boolean {
+  return (
+    workflow.status !== nextState.status ||
+    !areDatesEqual(workflow.startedAt, nextState.startedAt) ||
+    !areDatesEqual(workflow.completedAt, nextState.completedAt) ||
+    workflow.errorMessage !== nextState.errorMessage ||
+    !areJsonValuesEqual(workflow.responsePayload, nextState.responsePayload) ||
+    !areJsonValuesEqual(workflow.metadata, nextState.metadata)
+  );
+}
+
 function isActiveWorkflowStatus(status: WorkflowStatus): boolean {
   return status === WorkflowStatus.RUNNING || status === WorkflowStatus.WAITING || status === WorkflowStatus.QUEUED;
 }
@@ -298,21 +327,42 @@ export class WorkflowService {
       try {
         const execution = await this.executionService.pollExecution(workflow.externalExecutionId);
         const nextStatus = mapN8nStatusToWorkflowStatus(execution.status);
+        const nextStartedAt = execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt;
+        const nextCompletedAt = execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt;
+        const nextErrorMessage = nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null;
+        const nextResponsePayload = (execution.data === null ? workflow.responsePayload : execution.data) as Prisma.JsonValue | null;
+        const nextMetadata = (hasPollFailureMarker(workflow.metadata)
+          ? clearPollFailureMetadata(workflow.metadata)
+          : workflow.metadata) as Prisma.JsonValue | null;
+        const workflowChanged = hasWorkflowStateChanged(workflow, {
+          status: nextStatus,
+          startedAt: nextStartedAt,
+          completedAt: nextCompletedAt,
+          errorMessage: nextErrorMessage,
+          responsePayload: nextResponsePayload,
+          metadata: nextMetadata,
+        });
+
+        if (!workflowChanged && !isReconciliationRequired(workflow.metadata)) {
+          return workflow;
+        }
+
         const data: Prisma.WorkflowExecutionUpdateInput = {
           status: nextStatus,
-          startedAt: execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt,
-          completedAt: execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt,
-          errorMessage: nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null,
+          startedAt: nextStartedAt,
+          completedAt: nextCompletedAt,
+          errorMessage: nextErrorMessage,
           ...(execution.data === null ? {} : { responsePayload: execution.data }),
           ...(hasPollFailureMarker(workflow.metadata) ? { metadata: clearPollFailureMetadata(workflow.metadata) } : {}),
         };
         const shouldSync = await this.shouldSyncResourceStatuses(userId, {
           ...workflow,
           status: nextStatus,
-          startedAt: (data.startedAt as Date | undefined) ?? workflow.startedAt,
-          completedAt: (data.completedAt as Date | undefined) ?? workflow.completedAt,
-          errorMessage: (data.errorMessage as string | null | undefined) ?? workflow.errorMessage,
-          metadata: (data.metadata as Prisma.JsonValue | undefined) ?? workflow.metadata,
+          startedAt: nextStartedAt,
+          completedAt: nextCompletedAt,
+          errorMessage: nextErrorMessage,
+          responsePayload: nextResponsePayload,
+          metadata: nextMetadata,
         });
 
         return this.runInTransaction(async (transaction) => {

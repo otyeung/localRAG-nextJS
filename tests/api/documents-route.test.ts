@@ -4,10 +4,13 @@ vi.mock('server-only', () => ({}));
 
 const routeMocks = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
+  enforcePreProvisionRouteRateLimit: vi.fn(),
   rateLimit: vi.fn(),
   listDocuments: vi.fn(),
   getDocument: vi.fn(),
   softDeleteDocument: vi.fn(),
+  listPublicWorkflows: vi.fn(),
+  getPublicWorkflowStatus: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/current-user', () => ({
@@ -18,6 +21,10 @@ vi.mock('@/lib/security/rate-limit', () => ({
   rateLimit: routeMocks.rateLimit,
 }));
 
+vi.mock('@/lib/security/pre-provision-rate-limit', () => ({
+  enforcePreProvisionRouteRateLimit: routeMocks.enforcePreProvisionRouteRateLimit,
+}));
+
 vi.mock('@/lib/services/document-service', () => ({
   DocumentService: class {
     listDocuments = routeMocks.listDocuments;
@@ -26,21 +33,34 @@ vi.mock('@/lib/services/document-service', () => ({
   },
 }));
 
+vi.mock('@/lib/services/workflow-service', () => ({
+  WorkflowService: class {
+    listPublicWorkflows = routeMocks.listPublicWorkflows;
+    getPublicWorkflowStatus = routeMocks.getPublicWorkflowStatus;
+  },
+}));
+
 import { GET as listDocumentsRoute } from '@/app/api/documents/route';
 import { DELETE as deleteDocumentRoute, GET as getDocumentRoute } from '@/app/api/documents/[id]/route';
+import { GET as listWorkflowsRoute } from '@/app/api/workflows/route';
+import { GET as getWorkflowRoute } from '@/app/api/workflows/[id]/route';
 
 describe('documents routes', () => {
   beforeEach(() => {
     routeMocks.getCurrentUser.mockReset();
+    routeMocks.enforcePreProvisionRouteRateLimit.mockReset();
     routeMocks.rateLimit.mockReset();
     routeMocks.listDocuments.mockReset();
     routeMocks.getDocument.mockReset();
     routeMocks.softDeleteDocument.mockReset();
+    routeMocks.listPublicWorkflows.mockReset();
+    routeMocks.getPublicWorkflowStatus.mockReset();
     routeMocks.getCurrentUser.mockResolvedValue({
       id: 'user_1',
       displayName: 'Local User',
       provider: 'anonymous',
     });
+    routeMocks.enforcePreProvisionRouteRateLimit.mockResolvedValue(undefined);
     routeMocks.rateLimit.mockResolvedValue({
       allowed: true,
       remaining: 9,
@@ -82,6 +102,37 @@ describe('documents routes', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-02T00:00:00.000Z',
       deletedAt: null,
+    });
+    routeMocks.listPublicWorkflows.mockResolvedValue({
+      items: [
+        {
+          id: 'workflow_1',
+          workflowKey: 'ingestion',
+          status: 'RUNNING',
+          errorMessage: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          startedAt: '2026-01-01T00:00:00.000Z',
+          completedAt: null,
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          reconciliationRequired: false,
+        },
+      ],
+      total: 1,
+    });
+    routeMocks.getPublicWorkflowStatus.mockResolvedValue({
+      id: 'workflow_1',
+      workflowKey: 'ingestion',
+      status: 'RUNNING',
+      errorMessage: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: null,
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      reconciliationRequired: false,
     });
     routeMocks.softDeleteDocument.mockResolvedValue({
       id: 'document_1',
@@ -321,5 +372,116 @@ describe('documents routes', () => {
     expect(body.data).not.toHaveProperty('fileHash');
     expect(body.data).not.toHaveProperty('storagePath');
     expect(body.data).not.toHaveProperty('metadata');
+  });
+
+
+  it('applies the pre-provision guard before resolving document list users', async () => {
+    const request = new Request('https://app.example.com/api/documents', {
+      headers: {
+        'x-request-id': 'req_documents_pre_provision',
+      },
+    });
+
+    await listDocumentsRoute(request);
+
+    expect(routeMocks.enforcePreProvisionRouteRateLimit).toHaveBeenCalledWith(request, expect.any(Object), {
+      action: 'get',
+      errorMessage: 'Too many document requests.',
+      namespace: 'documents-api',
+    });
+    expect(routeMocks.enforcePreProvisionRouteRateLimit.mock.invocationCallOrder[0]).toBeLessThan(
+      routeMocks.getCurrentUser.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('applies the pre-provision guard before resolving document detail users', async () => {
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      headers: {
+        'x-request-id': 'req_document_pre_provision',
+      },
+    });
+
+    await getDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+
+    expect(routeMocks.enforcePreProvisionRouteRateLimit).toHaveBeenCalledWith(request, expect.any(Object), {
+      action: 'get',
+      errorMessage: 'Too many document requests.',
+      namespace: 'documents-api',
+    });
+  });
+
+  it('applies the pre-provision guard before resolving workflow list users', async () => {
+    const request = new Request('https://app.example.com/api/workflows', {
+      headers: {
+        'x-request-id': 'req_workflows_pre_provision',
+      },
+    });
+
+    const response = await listWorkflowsRoute(request);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        items: [
+          {
+            id: 'workflow_1',
+            workflowKey: 'ingestion',
+            status: 'RUNNING',
+            errorMessage: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            completedAt: null,
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            reconciliationRequired: false,
+          },
+        ],
+        total: 1,
+      },
+    });
+    expect(routeMocks.enforcePreProvisionRouteRateLimit).toHaveBeenCalledWith(request, expect.any(Object), {
+      action: 'get',
+      errorMessage: 'Too many workflow requests.',
+      namespace: 'workflows-api',
+    });
+    expect(routeMocks.listPublicWorkflows).toHaveBeenCalledWith('user_1');
+  });
+
+  it('applies the pre-provision guard before resolving workflow detail users', async () => {
+    const request = new Request('https://app.example.com/api/workflows/workflow_1', {
+      headers: {
+        'x-request-id': 'req_workflow_pre_provision',
+      },
+    });
+
+    const response = await getWorkflowRoute(request, {
+      params: Promise.resolve({ id: 'workflow_1' }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        id: 'workflow_1',
+        workflowKey: 'ingestion',
+        status: 'RUNNING',
+        errorMessage: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        completedAt: null,
+        uploadId: 'upload_1',
+        documentId: 'document_1',
+        reconciliationRequired: false,
+      },
+    });
+    expect(routeMocks.enforcePreProvisionRouteRateLimit).toHaveBeenCalledWith(request, expect.any(Object), {
+      action: 'get',
+      errorMessage: 'Too many workflow requests.',
+      namespace: 'workflows-api',
+    });
+    expect(routeMocks.getPublicWorkflowStatus).toHaveBeenCalledWith('user_1', 'workflow_1');
   });
 });

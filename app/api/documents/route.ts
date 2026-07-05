@@ -6,6 +6,7 @@ import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
+import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { rateLimit } from '@/lib/security/rate-limit';
 import { DocumentService, type DocumentDto, type DocumentQuery } from '@/lib/services/document-service';
 
@@ -47,6 +48,11 @@ export async function GET(request: Request): Promise<Response> {
   const requestContext = getRequestContext(request);
 
   try {
+    await enforcePreProvisionRouteRateLimit(request, requestContext, {
+      namespace: 'documents-api',
+      action: 'get',
+      errorMessage: 'Too many document requests.',
+    });
     const user = await getCurrentUser(request);
     const rateLimitResult = await rateLimit(`documents:get:${user.id}:${requestContext.ipAddress}`, {
       namespace: 'documents-api',

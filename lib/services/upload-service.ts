@@ -4,7 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { basename, parse, resolve } from 'node:path';
 
-import { UploadStatus, WorkflowStatus, type PrismaClient, type Upload } from '@prisma/client';
+import { nanoid } from 'nanoid';
+import { UploadStatus, WorkflowStatus, type Prisma, type PrismaClient, type Upload } from '@prisma/client';
 
 import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
@@ -15,9 +16,7 @@ import { VirusScanService } from '@/lib/services/virus-scan-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 
 type UploadDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
-type UploadTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
 type AcceptedUploadStateTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
-type UploadReconciliationTransactionDb = Pick<typeof prisma, 'workflowExecution' | 'auditLog'>;
 type TransactionRunner = Pick<PrismaClient, '$transaction'>;
 
 export type CreateUploadInput = {
@@ -104,6 +103,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unexpected error occurred.';
 }
 
+function createResourceId(): string {
+  return nanoid();
+}
+
+function buildAcceptedWorkflowMetadata(
+  workflowId: string | null | undefined,
+  overrides: Record<string, unknown> = {},
+): Prisma.InputJsonObject | undefined {
+  const metadata = {
+    ...(workflowId ? { workflowId } : {}),
+    ...overrides,
+  };
+
+  return Object.keys(metadata).length > 0 ? (metadata as Prisma.InputJsonObject) : undefined;
+}
+
 export function toPublicUploadResult(upload: UploadResult): PublicUploadResult {
   return {
     uploadId: upload.uploadId,
@@ -170,21 +185,13 @@ export class UploadService {
     });
 
     const storagePath = await this.persistUploadBytes(input.fileName, input.bytes);
-    let upload: { id: string };
-    let document: { id: string };
-    let workflow: { id: string };
+    const uploadId = createResourceId();
+    const documentId = createResourceId();
+    const workflowExecutionId = createResourceId();
+    const fileHash = createFileHash(input.bytes);
 
     try {
       await this.virusScanService.scanFile(storagePath);
-      const fileHash = createFileHash(input.bytes);
-      ({ upload, document, workflow } = await this.createUploadRecords({
-        userId: input.userId,
-        fileName: input.fileName,
-        mimeType: validation.normalizedMimeType,
-        fileSizeBytes: input.bytes.byteLength,
-        fileHash,
-        storagePath,
-      }));
     } catch (error) {
       await this.removeTempFile(storagePath);
       throw error;
@@ -193,8 +200,8 @@ export class UploadService {
     let startResult: Awaited<ReturnType<Pick<N8nIngestionService, 'startDocumentIngestion'>['startDocumentIngestion']>>;
     try {
       startResult = await this.ingestionService.startDocumentIngestion({
-        documentId: document.id,
-        uploadId: upload.id,
+        documentId,
+        uploadId,
         filePath: storagePath,
         fileName: input.fileName,
         mimeType: validation.normalizedMimeType,
@@ -203,46 +210,21 @@ export class UploadService {
     } catch (error) {
       const failureMessage = errorMessage(error);
       try {
-        await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) => {
-          await transaction.upload.update({
-            where: { id: upload.id },
-            data: {
-              status: UploadStatus.FAILED,
-              errorMessage: failureMessage,
+        await this.db.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'upload.ingestion_start_failed',
+            entityType: 'upload',
+            entityId: uploadId,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: {
+              documentId,
+              workflowExecutionId,
+              error: failureMessage,
             },
-          });
-
-          await transaction.document.update({
-            where: { id: document.id },
-            data: {
-              status: 'FAILED',
-            },
-          });
-
-          await transaction.workflowExecution.update({
-            where: { id: workflow.id },
-            data: {
-              status: WorkflowStatus.ERROR,
-              errorMessage: failureMessage,
-            },
-          });
-
-          await transaction.auditLog.create({
-            data: {
-              userId: input.userId,
-              action: 'upload.ingestion_start_failed',
-              entityType: 'upload',
-              entityId: upload.id,
-              requestId: input.requestId,
-              ipAddress: input.ipAddress,
-              userAgent: input.userAgent,
-              metadata: {
-                documentId: document.id,
-                workflowExecutionId: workflow.id,
-                error: failureMessage,
-              },
-            },
-          });
+          },
         });
       } finally {
         await this.removeTempFile(storagePath);
@@ -254,106 +236,98 @@ export class UploadService {
     const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
 
     try {
-      const updatedWorkflow = await this.transactionRunner.$transaction(
-        async (transaction: AcceptedUploadStateTransactionDb) => {
-          await transaction.upload.update({
-            where: { id: upload.id },
-            data: {
-              status: mapWorkflowStatusToUploadStatus(nextWorkflowStatus),
-            },
-          });
+      const createdWorkflow = await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) => {
+        const createdWorkflow = await this.createAcceptedUploadState(transaction, {
+          uploadId,
+          documentId,
+          workflowExecutionId,
+          userId: input.userId,
+          fileName: input.fileName,
+          mimeType: validation.normalizedMimeType,
+          fileSizeBytes: input.bytes.byteLength,
+          fileHash,
+          storagePath,
+          nextWorkflowStatus,
+          startResult,
+        });
 
-          await transaction.document.update({
-            where: { id: document.id },
-            data: {
-              status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
-            },
-          });
-
-          const updatedWorkflow = await transaction.workflowExecution.update({
-            where: { id: workflow.id },
-            data: {
+        await transaction.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'upload.created',
+            entityType: 'upload',
+            entityId: uploadId,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: {
+              documentId,
+              workflowExecutionId,
               externalExecutionId: startResult.executionId,
-              status: nextWorkflowStatus,
-              metadata: {
-                workflowId: startResult.workflowId,
-              },
             },
-          });
+          },
+        });
 
-          await transaction.auditLog.create({
-            data: {
-              userId: input.userId,
-              action: 'upload.created',
-              entityType: 'upload',
-              entityId: upload.id,
-              requestId: input.requestId,
-              ipAddress: input.ipAddress,
-              userAgent: input.userAgent,
-              metadata: {
-                documentId: document.id,
-                workflowExecutionId: workflow.id,
-                externalExecutionId: startResult.executionId,
-              },
-            },
-          });
-
-          return updatedWorkflow;
-        },
-      );
+        return createdWorkflow;
+      });
 
       return {
-        uploadId: upload.id,
-        documentId: document.id,
-        workflowExecutionId: workflow.id,
-        externalExecutionId: updatedWorkflow.externalExecutionId,
-        status: updatedWorkflow.status,
+        uploadId,
+        documentId,
+        workflowExecutionId,
+        externalExecutionId: createdWorkflow.externalExecutionId,
+        status: createdWorkflow.status,
         storagePath,
         reconciliationRequired: false,
       };
     } catch (error) {
       const localPersistenceError = errorMessage(error);
-      const reconciledWorkflow = await this.transactionRunner.$transaction(
-        async (transaction: UploadReconciliationTransactionDb) => {
-          const updatedWorkflow = await transaction.workflowExecution.update({
-            where: { id: workflow.id },
-            data: {
-              externalExecutionId: startResult.executionId,
-              status: nextWorkflowStatus,
-              metadata: {
-                workflowId: startResult.workflowId,
-                reconciliationRequired: true,
-                localPersistenceError,
-              },
-            },
-          });
-
-          await transaction.auditLog.create({
-            data: {
-              userId: input.userId,
-              action: 'upload.ingestion_reconciliation_required',
-              entityType: 'upload',
-              entityId: upload.id,
-              requestId: input.requestId,
-              ipAddress: input.ipAddress,
-              userAgent: input.userAgent,
-              metadata: {
-                documentId: document.id,
-                workflowExecutionId: workflow.id,
-                externalExecutionId: startResult.executionId,
-                error: localPersistenceError,
-              },
-            },
-          });
-
-          return updatedWorkflow;
-        },
+      const reconciledWorkflow = await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) =>
+        this.createAcceptedUploadState(transaction, {
+          uploadId,
+          documentId,
+          workflowExecutionId,
+          userId: input.userId,
+          fileName: input.fileName,
+          mimeType: validation.normalizedMimeType,
+          fileSizeBytes: input.bytes.byteLength,
+          fileHash,
+          storagePath,
+          nextWorkflowStatus,
+          startResult,
+          workflowMetadataOverrides: {
+            reconciliationRequired: true,
+            localPersistenceError,
+          },
+        }),
       );
 
+      try {
+        await this.db.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'upload.ingestion_reconciliation_required',
+            entityType: 'upload',
+            entityId: uploadId,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: {
+              documentId,
+              workflowExecutionId,
+              externalExecutionId: startResult.executionId,
+              error: localPersistenceError,
+            },
+          },
+        });
+      } catch {
+        // Keep the persisted reconciliation marker even if the follow-up audit write fails.
+      }
+
       return {
-        uploadId: upload.id,
-        documentId: document.id,
-        workflowExecutionId: workflow.id,
+        uploadId,
+        documentId,
+        workflowExecutionId,
         externalExecutionId: reconciledWorkflow.externalExecutionId,
         status: reconciledWorkflow.status,
         storagePath,
@@ -389,56 +363,66 @@ export class UploadService {
     return storagePath;
   }
 
-  private async createUploadRecords(input: {
-    userId: string;
-    fileName: string;
-    mimeType: string;
-    fileSizeBytes: number;
-    fileHash: string;
-    storagePath: string;
-  }): Promise<{
-    upload: { id: string };
-    document: { id: string };
-    workflow: { id: string };
+  private async createAcceptedUploadState(
+    transaction: AcceptedUploadStateTransactionDb,
+    input: {
+      uploadId: string;
+      documentId: string;
+      workflowExecutionId: string;
+      userId: string;
+      fileName: string;
+      mimeType: string;
+      fileSizeBytes: number;
+      fileHash: string;
+      storagePath: string;
+      nextWorkflowStatus: WorkflowStatus;
+      startResult: Awaited<ReturnType<Pick<N8nIngestionService, 'startDocumentIngestion'>['startDocumentIngestion']>>;
+      workflowMetadataOverrides?: Record<string, unknown>;
+    },
+  ): Promise<{
+    id: string;
+    status: WorkflowStatus;
+    externalExecutionId: string | null;
   }> {
-    return this.transactionRunner.$transaction(async (transaction: UploadTransactionDb) => {
-      const upload = await transaction.upload.create({
-        data: {
-          userId: input.userId,
-          status: UploadStatus.VALIDATING,
-          originalFilename: input.fileName,
-          mimeType: input.mimeType,
-          fileSizeBytes: input.fileSizeBytes,
-          fileHash: input.fileHash,
-          storagePath: input.storagePath,
-        },
-      });
+    await transaction.upload.create({
+      data: {
+        id: input.uploadId,
+        userId: input.userId,
+        status: mapWorkflowStatusToUploadStatus(input.nextWorkflowStatus),
+        originalFilename: input.fileName,
+        mimeType: input.mimeType,
+        fileSizeBytes: input.fileSizeBytes,
+        fileHash: input.fileHash,
+        storagePath: input.storagePath,
+      },
+    });
 
-      const document = await transaction.document.create({
-        data: {
-          userId: input.userId,
-          uploadId: upload.id,
-          title: this.buildDocumentTitle(input.fileName),
-          originalFilename: input.fileName,
-          mimeType: input.mimeType,
-          fileSizeBytes: input.fileSizeBytes,
-          fileHash: input.fileHash,
-          storagePath: input.storagePath,
-          status: 'PENDING',
-        },
-      });
+    await transaction.document.create({
+      data: {
+        id: input.documentId,
+        userId: input.userId,
+        uploadId: input.uploadId,
+        title: this.buildDocumentTitle(input.fileName),
+        originalFilename: input.fileName,
+        mimeType: input.mimeType,
+        fileSizeBytes: input.fileSizeBytes,
+        fileHash: input.fileHash,
+        storagePath: input.storagePath,
+        status: mapWorkflowStatusToDocumentStatus(input.nextWorkflowStatus),
+      },
+    });
 
-      const workflow = await transaction.workflowExecution.create({
-        data: {
-          userId: input.userId,
-          uploadId: upload.id,
-          documentId: document.id,
-          workflowKey: 'ingestion',
-          status: WorkflowStatus.QUEUED,
-        },
-      });
-
-      return { upload, document, workflow };
+    return transaction.workflowExecution.create({
+      data: {
+        id: input.workflowExecutionId,
+        userId: input.userId,
+        uploadId: input.uploadId,
+        documentId: input.documentId,
+        workflowKey: 'ingestion',
+        externalExecutionId: input.startResult.executionId,
+        status: input.nextWorkflowStatus,
+        metadata: buildAcceptedWorkflowMetadata(input.startResult.workflowId, input.workflowMetadataOverrides),
+      },
     });
   }
 
