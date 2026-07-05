@@ -1,13 +1,28 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
+function createNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let binary = '';
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary);
+}
+
 export function middleware(request: NextRequest): NextResponse {
   const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
   const forwardedHeaders = new Headers(request.headers);
   const isDevelopment = process.env.NODE_ENV === 'development';
-  const scriptSrc = isDevelopment ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self'";
+  const nonce = createNonce();
+  const scriptSrc = isDevelopment
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
 
   forwardedHeaders.set('x-request-id', requestId);
+  forwardedHeaders.set('x-nonce', nonce);
 
   const response = NextResponse.next({
     request: {
