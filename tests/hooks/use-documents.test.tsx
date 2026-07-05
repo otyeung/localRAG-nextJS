@@ -13,6 +13,29 @@ function createWrapper(queryClient: QueryClient) {
   return Wrapper;
 }
 
+function createDocument(index: number) {
+  return {
+    id: `document_${index}`,
+    uploadId: `upload_${index}`,
+    status: 'READY' as const,
+    title: `Document ${index}`,
+    originalFilename: `document-${index}.pdf`,
+    mimeType: 'application/pdf',
+    fileSizeBytes: 1024 + index,
+    chunkCount: index,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    deletedAt: null,
+  };
+}
+
+function createWorkflowSearchParams(documentIds: string[]) {
+  return new URLSearchParams([
+    ...documentIds.map((documentId) => ['documentIds', documentId] as [string, string]),
+    ['pageSize', String(documentIds.length)],
+  ]).toString();
+}
+
 describe('useDocuments', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -538,5 +561,128 @@ describe('useDocuments', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/documents?page=1&pageSize=40&sort=updatedAt&order=desc&query=vendor', undefined);
     expect(fetchSpy).toHaveBeenCalledWith('/api/workflows?documentIds=document_vendor&pageSize=1', undefined);
     expect(result.current.hasNextPage).toBe(false);
+  });
+
+  it('batches workflow lookups into <=100 document ids after loading more than 100 documents', async () => {
+    const firstPageDocuments = Array.from({ length: 100 }, (_, index) => createDocument(index + 1));
+    const secondPageDocuments = Array.from({ length: 5 }, (_, index) => createDocument(index + 101));
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (input === '/api/documents?page=1&pageSize=100&sort=updatedAt&order=desc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: firstPageDocuments,
+              total: 105,
+              page: 1,
+              pageSize: 100,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/documents?page=2&pageSize=100&sort=updatedAt&order=desc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: secondPageDocuments,
+              total: 105,
+              page: 2,
+              pageSize: 100,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (
+        input ===
+        `/api/workflows?${createWorkflowSearchParams(firstPageDocuments.map((document) => document.id))}`
+      ) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'workflow_1',
+                  workflowKey: 'ingestion',
+                  status: 'RUNNING',
+                  errorMessage: null,
+                  createdAt: '2026-01-02T00:00:00.000Z',
+                  updatedAt: '2026-01-02T00:00:30.000Z',
+                  startedAt: '2026-01-02T00:00:00.000Z',
+                  completedAt: null,
+                  uploadId: 'upload_1',
+                  documentId: 'document_1',
+                  reconciliationRequired: false,
+                },
+              ],
+              total: 1,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (
+        input ===
+        `/api/workflows?${createWorkflowSearchParams(secondPageDocuments.map((document) => document.id))}`
+      ) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'workflow_105',
+                  workflowKey: 'ingestion',
+                  status: 'ERROR',
+                  errorMessage: 'Needs attention.',
+                  createdAt: '2026-01-03T00:00:00.000Z',
+                  updatedAt: '2026-01-03T00:00:30.000Z',
+                  startedAt: '2026-01-03T00:00:00.000Z',
+                  completedAt: '2026-01-03T00:10:00.000Z',
+                  uploadId: 'upload_105',
+                  documentId: 'document_105',
+                  reconciliationRequired: false,
+                },
+              ],
+              total: 1,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const { result } = renderHook(() => useDocuments({ pageSize: 100 }), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.documents).toHaveLength(100);
+    expect(result.current.workflowsByDocumentId.get('document_1')).toMatchObject({ status: 'RUNNING' });
+
+    await result.current.fetchNextPage();
+
+    await waitFor(() => expect(result.current.documents).toHaveLength(105));
+    await waitFor(() => expect(result.current.workflowsByDocumentId.get('document_105')).toMatchObject({ status: 'ERROR' }));
+
+    const workflowRequests = fetchSpy.mock.calls
+      .map(([input]) => input)
+      .filter((input): input is string => typeof input === 'string' && input.startsWith('/api/workflows?'));
+    expect(workflowRequests).toEqual([
+      `/api/workflows?${createWorkflowSearchParams(firstPageDocuments.map((document) => document.id))}`,
+      `/api/workflows?${createWorkflowSearchParams(secondPageDocuments.map((document) => document.id))}`,
+    ]);
   });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 
 export type DocumentRecord = {
   id: string;
@@ -31,6 +31,8 @@ export type WorkflowRecord = {
   reconciliationRequired: boolean;
 };
 
+export type WorkflowLookupState = 'loading' | 'ready' | 'error';
+
 export type ReindexDocumentResult = {
   workflowExecutionId: string;
   status: WorkflowRecord['status'];
@@ -50,6 +52,8 @@ type WorkflowPayload = {
 };
 
 type ApiResponse<T> = { data: T };
+
+const WORKFLOW_BATCH_SIZE = 100;
 
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
@@ -116,22 +120,57 @@ export function useDocuments({
   );
   const totalDocuments = documentsQuery.data?.pages[0]?.total ?? 0;
   const workflowDocumentIds = useMemo(() => Array.from(new Set(documents.map((document) => document.id))), [documents]);
+  const workflowDocumentBatches = useMemo(() => {
+    const batches: string[][] = [];
 
-  const workflowsQuery = useQuery({
-    queryKey: ['workflows', { documentIds: workflowDocumentIds, pageSize: workflowDocumentIds.length }],
-    enabled: workflowDocumentIds.length > 0,
-    queryFn: () => {
-      const searchParams = new URLSearchParams();
+    for (let index = 0; index < workflowDocumentIds.length; index += WORKFLOW_BATCH_SIZE) {
+      batches.push(workflowDocumentIds.slice(index, index + WORKFLOW_BATCH_SIZE));
+    }
 
-      for (const documentId of workflowDocumentIds) {
-        searchParams.append('documentIds', documentId);
-      }
+    return batches;
+  }, [workflowDocumentIds]);
+  const workflowQueries = useQueries({
+    queries: workflowDocumentBatches.map((documentIds) => ({
+      queryKey: ['workflows', { documentIds, pageSize: documentIds.length }],
+      queryFn: () => {
+        const searchParams = new URLSearchParams();
 
-      searchParams.set('pageSize', String(workflowDocumentIds.length));
+        for (const documentId of documentIds) {
+          searchParams.append('documentIds', documentId);
+        }
 
-      return requestJson<WorkflowPayload>(`/api/workflows?${searchParams.toString()}`);
-    },
+        searchParams.set('pageSize', String(documentIds.length));
+
+        return requestJson<WorkflowPayload>(`/api/workflows?${searchParams.toString()}`);
+      },
+    })),
   });
+  const workflowItems = useMemo(
+    () => workflowQueries.flatMap((workflowQuery) => workflowQuery.data?.items ?? []),
+    [workflowQueries],
+  );
+  const workflowLookupStateByDocumentId = useMemo(() => {
+    const workflowLookupState = new Map<string, WorkflowLookupState>();
+
+    for (const [index, documentIds] of workflowDocumentBatches.entries()) {
+      const workflowQuery = workflowQueries[index];
+      const state: WorkflowLookupState = workflowQuery?.isError
+        ? 'error'
+        : workflowQuery?.isSuccess
+          ? 'ready'
+          : 'loading';
+
+      for (const documentId of documentIds) {
+        workflowLookupState.set(documentId, state);
+      }
+    }
+
+    return workflowLookupState;
+  }, [workflowDocumentBatches, workflowQueries]);
+  const workflowsError = useMemo(
+    () => workflowQueries.find((workflowQuery) => workflowQuery.error instanceof Error)?.error ?? null,
+    [workflowQueries],
+  );
 
   const deleteDocument = useMutation({
     mutationFn: (id: string) =>
@@ -191,7 +230,7 @@ export function useDocuments({
   const workflowsByDocumentId = useMemo(() => {
     const workflowMap = new Map<string, WorkflowRecord>();
 
-    for (const workflow of workflowsQuery.data?.items ?? []) {
+    for (const workflow of workflowItems) {
       if (!workflow.documentId || workflowMap.has(workflow.documentId)) {
         continue;
       }
@@ -200,11 +239,13 @@ export function useDocuments({
     }
 
     return workflowMap;
-  }, [workflowsQuery.data?.items]);
+  }, [workflowItems]);
 
   return {
     ...documentsQuery,
-    workflows: workflowsQuery.data?.items ?? [],
+    workflows: workflowItems,
+    workflowsError,
+    workflowLookupStateByDocumentId,
     documents,
     totalDocuments,
     loadedDocuments: documents.length,

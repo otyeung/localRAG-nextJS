@@ -3,7 +3,7 @@
 import { Database, RefreshCw, Search, Trash2 } from 'lucide-react';
 
 import { StatusBadge } from '@/components/common/status-badge';
-import type { DocumentRecord, WorkflowRecord } from '@/hooks/use-documents';
+import type { DocumentRecord, WorkflowLookupState, WorkflowRecord } from '@/hooks/use-documents';
 import type { UploadHistoryItem } from '@/hooks/use-upload-queue';
 
 function formatBytes(bytes: number) {
@@ -44,12 +44,44 @@ function formatChunkCount(chunkCount: number) {
   return `${chunkCount} ${chunkCount === 1 ? 'chunk' : 'chunks'}`;
 }
 
-function canReindexDocument(document: DocumentRecord, workflow: WorkflowRecord | undefined) {
+function workflowStatusLabel(workflow: WorkflowRecord | undefined, lookupState: WorkflowLookupState) {
+  if (lookupState === 'error') {
+    return 'Workflow unavailable';
+  }
+
+  if (lookupState === 'loading') {
+    return 'Checking workflow';
+  }
+
+  return workflow?.status ?? 'Workflow pending';
+}
+
+function workflowStatusDescription(workflow: WorkflowRecord | undefined, lookupState: WorkflowLookupState) {
+  if (lookupState === 'error') {
+    return 'Workflow unavailable';
+  }
+
+  if (lookupState === 'loading') {
+    return 'Checking workflow status';
+  }
+
+  return workflow?.status ?? 'Waiting for workflow route';
+}
+
+function canReindexDocument(
+  document: DocumentRecord,
+  workflow: WorkflowRecord | undefined,
+  workflowLookupState: WorkflowLookupState,
+) {
   if (document.deletedAt) {
     return false;
   }
 
   if (document.status === 'PENDING' || document.status === 'INGESTING') {
+    return false;
+  }
+
+  if (workflowLookupState !== 'ready') {
     return false;
   }
 
@@ -65,6 +97,7 @@ export function DocumentLibrary({
   isLoadingDocuments = false,
   documentsError = null,
   workflowsByDocumentId,
+  workflowLookupStateByDocumentId,
   uploadHistory,
   isLoadingUploadHistory = false,
   uploadHistoryError = null,
@@ -87,6 +120,7 @@ export function DocumentLibrary({
   isLoadingDocuments?: boolean;
   documentsError?: string | null;
   workflowsByDocumentId: Map<string, WorkflowRecord>;
+  workflowLookupStateByDocumentId?: Map<string, WorkflowLookupState>;
   uploadHistory: UploadHistoryItem[];
   isLoadingUploadHistory?: boolean;
   uploadHistoryError?: string | null;
@@ -158,8 +192,9 @@ export function DocumentLibrary({
           <>
             {documents.map((document) => {
               const workflow = workflowsByDocumentId.get(document.id);
+              const workflowLookupState = workflowLookupStateByDocumentId?.get(document.id) ?? 'ready';
               const relatedUploads = uploadHistory.filter((upload) => upload.id === document.uploadId);
-              const canReindex = canReindexDocument(document, workflow);
+              const canReindex = canReindexDocument(document, workflow, workflowLookupState);
               const isReindexing = pendingReindexDocumentIds.has(document.id);
 
               return (
@@ -182,8 +217,8 @@ export function DocumentLibrary({
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge label={document.status} tone={statusTone(document.status)} />
                         <StatusBadge
-                          label={workflow?.status ?? 'Workflow pending'}
-                          tone={workflow ? statusTone(workflow.status) : 'neutral'}
+                          label={workflowStatusLabel(workflow, workflowLookupState)}
+                          tone={workflowLookupState === 'error' ? 'warning' : workflow ? statusTone(workflow.status) : 'neutral'}
                         />
                         <StatusBadge label={sortLabel(sort)} tone="neutral" />
                       </div>
@@ -211,7 +246,9 @@ export function DocumentLibrary({
                         </div>
                         <div>
                           <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Workflow status</dt>
-                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">{workflow?.status ?? 'Waiting for workflow route'}</dd>
+                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
+                            {workflowStatusDescription(workflow, workflowLookupState)}
+                          </dd>
                         </div>
                       </dl>
 

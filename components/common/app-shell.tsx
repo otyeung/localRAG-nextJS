@@ -162,6 +162,7 @@ export function AppShell() {
                   isLoadingDocuments={documents.isLoading}
                   documentsError={documents.error?.message ?? null}
                   workflowsByDocumentId={documents.workflowsByDocumentId}
+                  workflowLookupStateByDocumentId={documents.workflowLookupStateByDocumentId}
                   uploadHistory={uploads.uploadHistory}
                   isLoadingUploadHistory={uploads.isLoadingHistory}
                   uploadHistoryError={uploads.historyError?.message ?? null}

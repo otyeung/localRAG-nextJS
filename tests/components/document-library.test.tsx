@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DocumentLibrary } from '@/components/documents/document-library';
-import type { DocumentRecord, WorkflowRecord } from '@/hooks/use-documents';
+import type { DocumentRecord, WorkflowLookupState, WorkflowRecord } from '@/hooks/use-documents';
 
 describe('DocumentLibrary', () => {
   afterEach(() => {
@@ -142,6 +142,51 @@ describe('DocumentLibrary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-index Vendor Checklist' }));
 
     expect(onReindex).toHaveBeenCalledWith('document_failed');
+  });
+
+  it('disables re-index and shows an unavailable workflow state when workflow lookup failed', () => {
+    const onReindex = vi.fn();
+
+    render(
+      createElement(DocumentLibrary, {
+        documents: [
+          {
+            id: 'document_failed',
+            uploadId: 'upload_3',
+            status: 'FAILED',
+            title: 'Vendor Checklist',
+            originalFilename: 'vendor-checklist.pdf',
+            mimeType: 'application/pdf',
+            fileSizeBytes: 4096,
+            chunkCount: 0,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
+          },
+        ],
+        workflowsByDocumentId: new Map(),
+        workflowLookupStateByDocumentId: new Map<string, WorkflowLookupState>([['document_failed', 'error']]),
+        uploadHistory: [],
+        search: '',
+        statusFilter: 'ALL',
+        sort: 'updatedAt',
+        onSearchChange: vi.fn(),
+        onStatusFilterChange: vi.fn(),
+        onSortChange: vi.fn(),
+        onDelete: vi.fn(),
+        onReindex,
+        pendingReindexDocumentIds: new Set<string>(),
+        reindexError: null,
+      }),
+    );
+
+    const button = screen.getByRole('button', { name: 'Re-index Vendor Checklist' });
+    expect(button).toBeDisabled();
+    expect(screen.getAllByText('Workflow unavailable').length).toBeGreaterThan(0);
+
+    fireEvent.click(button);
+
+    expect(onReindex).not.toHaveBeenCalled();
   });
 
   it('renders real chunk counts instead of placeholder telemetry copy', () => {
