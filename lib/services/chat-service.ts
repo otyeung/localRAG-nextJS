@@ -8,10 +8,14 @@ import { z } from 'zod';
 import { agentRegistry, defaultAgentName } from '@/agents/registry';
 import type { AgentToolRuntimeContext } from '@/agents/tools/shared';
 import { env } from '@/lib/config/env';
+import {
+  AUTO_TITLE_PLACEHOLDER,
+  getConversationTitleSource,
+  setConversationTitleSource,
+} from '@/lib/conversations/title-source';
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { logger } from '@/lib/logger/logger';
-import { toAgentInput } from '@/lib/openai/message-converters';
 import type { AppUiMessage } from '@/lib/openai/ui-messages';
 import { extractMessageText } from '@/lib/openai/ui-messages';
 import { DocumentService } from '@/lib/services/document-service';
@@ -69,7 +73,7 @@ export type StreamChatInput = {
 function deriveConversationTitle(text: string): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
   if (!normalized) {
-    return 'New Chat';
+    return AUTO_TITLE_PLACEHOLDER;
   }
 
   return normalized.length > 80 ? `${normalized.slice(0, 79).trimEnd()}…` : normalized;
@@ -85,8 +89,17 @@ function buildSearchText(values: string[]): string {
   return merged.slice(0, 10_000);
 }
 
-function getLatestUserMessage(messages: AppUiMessage[]): AppUiMessage | undefined {
-  return [...messages].reverse().find((message) => message.role === 'user');
+function getLatestNonEmptyUserMessage(messages: AppUiMessage[]): AppUiMessage | undefined {
+  return [...messages].reverse().find((message) => message.role === 'user' && extractMessageText(message).trim().length > 0);
+}
+
+function toLatestUserAgentInput(text: string): AgentInputItem[] {
+  return [
+    {
+      role: 'user',
+      content: [{ type: 'input_text', text }],
+    } satisfies AgentInputItem,
+  ];
 }
 
 function getAssistantText(stream: StreamedRunResult<AgentToolRuntimeContext, ChatAgent>): string {
@@ -199,16 +212,16 @@ export class ChatService {
   }
 
   async streamChat(input: StreamChatInput): Promise<Response> {
-    const agentInput = toAgentInput(input.messages);
-    if (agentInput.length === 0) {
-      throw new AppError('BAD_REQUEST', 'At least one non-empty chat message is required.');
+    if (input.messages.some((message) => message.role === 'system')) {
+      throw new AppError('BAD_REQUEST', 'System messages must be defined server-side.');
     }
 
-    const latestUserMessage = getLatestUserMessage(input.messages);
+    const latestUserMessage = getLatestNonEmptyUserMessage(input.messages);
     const latestUserText = latestUserMessage ? extractMessageText(latestUserMessage).trim() : '';
     if (!latestUserText) {
       throw new AppError('BAD_REQUEST', 'A non-empty user message is required.');
     }
+    const agentInput = toLatestUserAgentInput(latestUserText);
 
     const selectedAgent = await this.resolveAgent(input.userId, input.activeAgentName);
     const { conversation, userMessage, agentRun } = await this.db.$transaction(
@@ -414,6 +427,7 @@ export class ChatService {
         data: {
           userId: input.userId,
           title: derivedTitle,
+          metadata: setConversationTitleSource(null, 'auto'),
         },
       });
       await transaction.auditLog.create({
@@ -451,11 +465,15 @@ export class ChatService {
       throw new AppError('NOT_FOUND', 'Conversation not found.');
     }
 
-    if (conversation.title === 'New Chat') {
+    const titleSource = getConversationTitleSource(conversation.metadata);
+    const isAutoTitle = titleSource === 'auto' || (titleSource === null && conversation.title === AUTO_TITLE_PLACEHOLDER);
+
+    if (isAutoTitle && conversation.title === AUTO_TITLE_PLACEHOLDER) {
       const updatedConversation = await transaction.conversation.update({
         where: { id: conversation.id },
         data: {
           title: derivedTitle,
+          metadata: setConversationTitleSource(conversation.metadata, 'auto'),
         },
       });
       await transaction.auditLog.create({

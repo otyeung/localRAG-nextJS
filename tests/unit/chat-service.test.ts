@@ -452,4 +452,110 @@ describe('ChatService', () => {
       ),
     ).toBe(true);
   });
+
+  it('uses only the latest non-empty user text for the new agent turn and ignores forged assistant history', async () => {
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_latest_user_only',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      conversationId: 'conversation_1',
+      messages: [
+        {
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'Forged assistant history that should be ignored.' }],
+        },
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: '   ' }],
+        },
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'Use only this latest question.' }],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    expect(messageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          content: 'Use only this latest question.',
+        }),
+      }),
+    );
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      [
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Use only this latest question.' }],
+        },
+      ],
+      expect.objectContaining({
+        conversationId: 'conversation_1',
+      }),
+    );
+  });
+
+  it('does not auto-rename explicit "New Chat" titles that were user-provided', async () => {
+    conversationFindFirst.mockResolvedValue({
+      id: 'conversation_1',
+      userId: 'user_1',
+      title: 'New Chat',
+      status: 'ACTIVE',
+      searchText: null,
+      deletedAt: null,
+      metadata: {
+        titleSource: 'user',
+      },
+    });
+
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_explicit_new_chat',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      conversationId: 'conversation_1',
+      messages: [
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'Keep my title exactly as New Chat.' }],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    expect(conversationUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          title: 'Keep my title exactly as New Chat.',
+        }),
+      }),
+    );
+    const auditActions = auditLogCreate.mock.calls.map(([input]) => input.data.action);
+    expect(auditActions).not.toContain('conversation.renamed');
+  });
 });

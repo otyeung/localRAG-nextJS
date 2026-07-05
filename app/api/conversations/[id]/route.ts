@@ -2,6 +2,7 @@ import { ConversationStatus } from '@prisma/client';
 import { z } from 'zod';
 
 import { getCurrentUser } from '@/lib/auth/current-user';
+import { setConversationTitleSource } from '@/lib/conversations/title-source';
 import { prisma } from '@/lib/db/prisma';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
@@ -108,6 +109,7 @@ async function getOwnedConversation(userId: string, id: string) {
       id: true,
       title: true,
       status: true,
+      metadata: true,
       createdAt: true,
       updatedAt: true,
       deletedAt: true,
@@ -199,6 +201,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
           id: true,
           title: true,
           status: true,
+          metadata: true,
           createdAt: true,
           updatedAt: true,
           deletedAt: true,
@@ -227,6 +230,9 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
         where: { id },
         data: {
           ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.title !== undefined
+            ? { metadata: setConversationTitleSource(existing.metadata, 'user') }
+            : {}),
           ...(body.status !== undefined ? { status: nextStatus } : {}),
         },
         select: {

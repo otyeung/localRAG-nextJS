@@ -89,6 +89,9 @@ describe('conversations routes', () => {
       id: 'conversation_1',
       title: 'Project Kickoff',
       status: 'ACTIVE',
+      metadata: {
+        titleSource: 'user',
+      },
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     });
@@ -122,6 +125,15 @@ describe('conversations routes', () => {
       },
     });
     expect(routeMocks.transaction).toHaveBeenCalledOnce();
+    expect(routeMocks.conversationCreate).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        title: 'Project Kickoff',
+        metadata: {
+          titleSource: 'user',
+        },
+      },
+    });
     expect(routeMocks.auditLogCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
@@ -139,6 +151,44 @@ describe('conversations routes', () => {
     });
     const auditEntry = routeMocks.auditLogCreate.mock.calls[0]?.[0];
     expect(auditEntry.data.metadata).not.toHaveProperty('title');
+  });
+
+  it('marks explicit "New Chat" titles as user-provided', async () => {
+    routeMocks.conversationCreate.mockResolvedValue({
+      id: 'conversation_new_chat',
+      title: 'New Chat',
+      status: 'ACTIVE',
+      metadata: {
+        titleSource: 'user',
+      },
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const request = new Request('https://app.example.com/api/conversations', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_conversation_new_chat_title',
+      },
+      body: JSON.stringify({
+        title: 'New Chat',
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(routeMocks.conversationCreate).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        title: 'New Chat',
+        metadata: {
+          titleSource: 'user',
+        },
+      },
+    });
   });
 
   it('rejects invalid conversation updates with structured validation errors', async () => {

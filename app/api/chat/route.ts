@@ -43,6 +43,9 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const body = validateWithSchema(chatRequestSchema, await request.json(), 'Invalid chat request payload.');
+    if (body.messages.some((message) => message.role === 'system')) {
+      throw new AppError('BAD_REQUEST', 'System messages must be defined server-side.');
+    }
 
     return await chatService.streamChat({
       ...body,

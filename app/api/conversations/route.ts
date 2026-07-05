@@ -2,6 +2,7 @@ import { ConversationStatus } from '@prisma/client';
 import { z } from 'zod';
 
 import { getCurrentUser } from '@/lib/auth/current-user';
+import { AUTO_TITLE_PLACEHOLDER, setConversationTitleSource } from '@/lib/conversations/title-source';
 import { prisma } from '@/lib/db/prisma';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
@@ -175,6 +176,7 @@ export async function POST(request: Request): Promise<Response> {
         data: {
           userId: user.id,
           ...(body.title ? { title: body.title } : {}),
+          metadata: setConversationTitleSource(null, body.title ? 'user' : 'auto'),
         },
       });
       await transaction.auditLog.create({
@@ -189,6 +191,8 @@ export async function POST(request: Request): Promise<Response> {
           metadata: {
             source: 'conversations-api',
             hasCustomTitle: Boolean(body.title),
+            titleSource: body.title ? 'user' : 'auto',
+            autoTitlePlaceholder: body.title ? undefined : AUTO_TITLE_PLACEHOLDER,
           },
         },
       });

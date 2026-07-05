@@ -4,6 +4,7 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 
 import { prisma } from '@/lib/db/prisma';
+import { AppError } from '@/lib/http/api-errors';
 import { N8nRetrievalService } from '@/lib/n8n/retrieval';
 
 import { getAgentToolContext, type AgentToolRuntimeContext, withRecordedToolCall } from '@/agents/tools/shared';
@@ -27,7 +28,7 @@ export type RetrieveChunksToolResult = {
 
 export function createRetrieveChunksTool(
   dependencies: {
-    db?: Pick<typeof prisma, 'toolCall'>;
+    db?: Pick<typeof prisma, 'toolCall' | 'document'>;
     retrievalService?: Pick<N8nRetrievalService, 'retrieve'>;
   } = {},
 ) {
@@ -51,6 +52,26 @@ export function createRetrieveChunksTool(
           requestId: context.requestId,
         },
         execute: async (): Promise<RetrieveChunksToolResult> => {
+          if (input.documentIds.length > 0) {
+            const requestedDocumentIds = [...new Set(input.documentIds)];
+            const ownedDocuments = await db.document.findMany({
+              where: {
+                id: {
+                  in: requestedDocumentIds,
+                },
+                userId: context.userId,
+                deletedAt: null,
+              },
+              select: {
+                id: true,
+              },
+            });
+
+            if (ownedDocuments.length !== requestedDocumentIds.length) {
+              throw new AppError('BAD_REQUEST', 'One or more requested documents are unavailable.');
+            }
+          }
+
           const chunks = await retrievalService.retrieve({
             query: input.query,
             conversationId: context.conversationId,

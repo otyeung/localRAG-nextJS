@@ -20,6 +20,7 @@ import { createSearchConversationTool } from '@/agents/tools/search-conversation
 describe('agent tools', () => {
   const toolCallCreate = vi.fn();
   const toolCallUpdate = vi.fn();
+  const documentFindMany = vi.fn();
   const retrievalService = {
     retrieve: vi.fn(),
   };
@@ -29,6 +30,7 @@ describe('agent tools', () => {
   beforeEach(() => {
     toolCallCreate.mockReset();
     toolCallUpdate.mockReset();
+    documentFindMany.mockReset();
     retrievalService.retrieve.mockReset();
     conversationFindFirst.mockReset();
     messageFindMany.mockReset();
@@ -38,6 +40,11 @@ describe('agent tools', () => {
   });
 
   it('records successful retrieval tool calls and returns serializable chunk data', async () => {
+    documentFindMany.mockResolvedValue([
+      {
+        id: 'document_1',
+      },
+    ]);
     retrievalService.retrieve.mockResolvedValue([
       {
         id: 'chunk_1',
@@ -57,6 +64,9 @@ describe('agent tools', () => {
         toolCall: {
           create: toolCallCreate,
           update: toolCallUpdate,
+        },
+        document: {
+          findMany: documentFindMany,
         },
       } as never,
       retrievalService: retrievalService as never,
@@ -121,6 +131,64 @@ describe('agent tools', () => {
         metadata: expect.objectContaining({
           durationMs: expect.any(Number),
         }),
+      }),
+    });
+  });
+
+  it('rejects retrieve_chunks documentIds that are not owned by the current user', async () => {
+    documentFindMany.mockResolvedValue([
+      {
+        id: 'document_1',
+      },
+    ]);
+
+    const tool = createRetrieveChunksTool({
+      db: {
+        toolCall: {
+          create: toolCallCreate,
+          update: toolCallUpdate,
+        },
+        document: {
+          findMany: documentFindMany,
+        },
+      } as never,
+      retrievalService: retrievalService as never,
+    });
+
+    await expect(
+      tool.invoke(
+        new RunContext({
+          userId: 'user_1',
+          conversationId: 'conversation_1',
+          agentRunId: 'run_1',
+          requestId: 'req_1',
+        }),
+        JSON.stringify({
+          query: 'cargo capacity',
+          documentIds: ['document_1', 'document_2'],
+          topK: 3,
+        }),
+      ),
+    ).resolves.toContain('One or more requested documents are unavailable.');
+
+    expect(documentFindMany).toHaveBeenCalledWith({
+      where: {
+        id: {
+          in: ['document_1', 'document_2'],
+        },
+        userId: 'user_1',
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+      },
+    });
+    expect(retrievalService.retrieve).not.toHaveBeenCalled();
+    expect(toolCallUpdate).toHaveBeenCalledWith({
+      where: { id: 'tool_call_1' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        errorMessage: 'One or more requested documents are unavailable.',
       }),
     });
   });
