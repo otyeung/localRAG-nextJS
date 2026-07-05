@@ -76,7 +76,7 @@ export function DocumentLibrary({
   onSortChange,
   onDelete,
   onReindex,
-  reindexingDocumentId,
+  pendingReindexDocumentIds,
   reindexError,
 }: {
   documents: DocumentRecord[];
@@ -98,7 +98,7 @@ export function DocumentLibrary({
   onSortChange: (value: 'createdAt' | 'updatedAt' | 'title') => void;
   onDelete: (id: string) => void;
   onReindex: (id: string) => void;
-  reindexingDocumentId: string | null;
+  pendingReindexDocumentIds: ReadonlySet<string>;
   reindexError: string | null;
 }) {
   return (
@@ -160,7 +160,7 @@ export function DocumentLibrary({
               const workflow = workflowsByDocumentId.get(document.id);
               const relatedUploads = uploadHistory.filter((upload) => upload.id === document.uploadId);
               const canReindex = canReindexDocument(document, workflow);
-              const isReindexing = reindexingDocumentId === document.id;
+              const isReindexing = pendingReindexDocumentIds.has(document.id);
 
               return (
                 <article

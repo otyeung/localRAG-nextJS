@@ -52,6 +52,11 @@ export type WorkflowListResult = {
   total: number;
 };
 
+export type WorkflowListQuery = {
+  documentIds?: string[];
+  pageSize?: number;
+};
+
 export type PublicWorkflowListResult = {
   items: PublicWorkflowExecutionDto[];
   total: number;
@@ -275,11 +280,40 @@ export class WorkflowService {
     return (this.dependencies.db ?? prisma) as WorkflowDb;
   }
 
-  async listWorkflows(userId: string): Promise<WorkflowListResult> {
+  async listWorkflows(userId: string, query: WorkflowListQuery = {}): Promise<WorkflowListResult> {
+    const normalizedDocumentIds = Array.from(new Set(query.documentIds?.filter((documentId) => documentId.trim().length > 0) ?? []));
+
+    if (normalizedDocumentIds.length > 0) {
+      const items = await this.db.workflowExecution.findMany({
+        where: {
+          userId,
+          documentId: {
+            in: normalizedDocumentIds,
+          },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const latestItems = items.filter((workflow, index) => {
+        if (!workflow.documentId) {
+          return false;
+        }
+
+        return items.findIndex((candidate) => candidate.documentId === workflow.documentId) === index;
+      });
+      const pagedItems = typeof query.pageSize === 'number' ? latestItems.slice(0, query.pageSize) : latestItems;
+      const reconciledItems = await Promise.all(pagedItems.map(async (workflow) => this.reconcileWorkflow(userId, workflow)));
+
+      return {
+        items: reconciledItems.map(toWorkflowDto),
+        total: latestItems.length,
+      };
+    }
+
     const [items, total] = await Promise.all([
       this.db.workflowExecution.findMany({
         where: { userId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(typeof query.pageSize === 'number' ? { take: query.pageSize } : {}),
       }),
       this.db.workflowExecution.count({
         where: { userId },
@@ -294,8 +328,8 @@ export class WorkflowService {
     };
   }
 
-  async listPublicWorkflows(userId: string): Promise<PublicWorkflowListResult> {
-    const result = await this.listWorkflows(userId);
+  async listPublicWorkflows(userId: string, query: WorkflowListQuery = {}): Promise<PublicWorkflowListResult> {
+    const result = await this.listWorkflows(userId, query);
 
     return {
       items: result.items.map(toPublicWorkflowExecutionDto),

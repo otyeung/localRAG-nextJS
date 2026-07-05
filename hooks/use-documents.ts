@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 export type DocumentRecord = {
@@ -80,6 +80,8 @@ export function useDocuments({
 } = {}) {
   const queryClient = useQueryClient();
   const normalizedSearch = search?.trim() ?? '';
+  const pendingReindexDocumentIdsRef = useRef(new Set<string>());
+  const [pendingReindexDocumentIds, setPendingReindexDocumentIds] = useState<Set<string>>(new Set());
 
   const documentsQuery = useInfiniteQuery({
     queryKey: ['documents', { search: normalizedSearch, status: status ?? 'all', sort, order, pageSize }],
@@ -108,9 +110,27 @@ export function useDocuments({
     },
   });
 
+  const documents = useMemo(
+    () => documentsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [documentsQuery.data?.pages],
+  );
+  const totalDocuments = documentsQuery.data?.pages[0]?.total ?? 0;
+  const workflowDocumentIds = useMemo(() => Array.from(new Set(documents.map((document) => document.id))), [documents]);
+
   const workflowsQuery = useQuery({
-    queryKey: ['workflows'],
-    queryFn: () => requestJson<WorkflowPayload>('/api/workflows'),
+    queryKey: ['workflows', { documentIds: workflowDocumentIds, pageSize: workflowDocumentIds.length }],
+    enabled: workflowDocumentIds.length > 0,
+    queryFn: () => {
+      const searchParams = new URLSearchParams();
+
+      for (const documentId of workflowDocumentIds) {
+        searchParams.append('documentIds', documentId);
+      }
+
+      searchParams.set('pageSize', String(workflowDocumentIds.length));
+
+      return requestJson<WorkflowPayload>(`/api/workflows?${searchParams.toString()}`);
+    },
   });
 
   const deleteDocument = useMutation({
@@ -138,12 +158,36 @@ export function useDocuments({
       ]);
     },
   });
+  const queueReindexDocument = useCallback(
+    async (id: string) => {
+      if (pendingReindexDocumentIdsRef.current.has(id)) {
+        return null;
+      }
 
-  const documents = useMemo(
-    () => documentsQuery.data?.pages.flatMap((page) => page.items) ?? [],
-    [documentsQuery.data?.pages],
+      pendingReindexDocumentIdsRef.current.add(id);
+      setPendingReindexDocumentIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        nextIds.add(id);
+        return nextIds;
+      });
+
+      try {
+        return await reindexDocument.mutateAsync(id);
+      } finally {
+        pendingReindexDocumentIdsRef.current.delete(id);
+        setPendingReindexDocumentIds((currentIds) => {
+          if (!currentIds.has(id)) {
+            return currentIds;
+          }
+
+          const nextIds = new Set(currentIds);
+          nextIds.delete(id);
+          return nextIds;
+        });
+      }
+    },
+    [reindexDocument],
   );
-  const totalDocuments = documentsQuery.data?.pages[0]?.total ?? 0;
   const workflowsByDocumentId = useMemo(() => {
     const workflowMap = new Map<string, WorkflowRecord>();
 
@@ -165,6 +209,8 @@ export function useDocuments({
     totalDocuments,
     loadedDocuments: documents.length,
     workflowsByDocumentId,
+    pendingReindexDocumentIds,
+    queueReindexDocument,
     deleteDocument,
     reindexDocument,
   };

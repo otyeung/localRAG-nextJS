@@ -1821,6 +1821,103 @@ describe('document services', () => {
     });
   });
 
+  it('limits public workflows to the latest requested document executions', async () => {
+    const db = {
+      workflowExecution: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'workflow_3',
+            userId: 'user_1',
+            uploadId: 'upload_3',
+            documentId: 'document_2',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.SUCCESS,
+            externalExecutionId: null,
+            requestPayload: { prompt: 'secret' },
+            responsePayload: { ok: true },
+            metadata: null,
+            errorMessage: null,
+            startedAt: new Date('2026-01-03T00:00:00.000Z'),
+            completedAt: new Date('2026-01-03T00:01:00.000Z'),
+            createdAt: new Date('2026-01-03T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-03T00:01:00.000Z'),
+          },
+          {
+            id: 'workflow_2',
+            userId: 'user_1',
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.RUNNING,
+            externalExecutionId: null,
+            requestPayload: { prompt: 'secret' },
+            responsePayload: null,
+            metadata: null,
+            errorMessage: null,
+            startedAt: new Date('2026-01-02T00:00:00.000Z'),
+            completedAt: null,
+            createdAt: new Date('2026-01-02T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-02T00:01:00.000Z'),
+          },
+          {
+            id: 'workflow_1',
+            userId: 'user_1',
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.ERROR,
+            externalExecutionId: null,
+            requestPayload: { prompt: 'secret' },
+            responsePayload: null,
+            metadata: null,
+            errorMessage: 'Older workflow should be excluded.',
+            startedAt: new Date('2026-01-01T00:00:00.000Z'),
+            completedAt: new Date('2026-01-01T00:01:00.000Z'),
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+          },
+        ]),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    const result = await service.listPublicWorkflows('user_1', {
+      documentIds: ['document_1', 'document_2'],
+      pageSize: 1,
+    });
+
+    expect(db.workflowExecution.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'user_1',
+        documentId: { in: ['document_1', 'document_2'] },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    expect(result).toEqual({
+      items: [
+        {
+          id: 'workflow_3',
+          workflowKey: 'ingestion',
+          status: 'SUCCESS',
+          errorMessage: null,
+          createdAt: '2026-01-03T00:00:00.000Z',
+          updatedAt: '2026-01-03T00:01:00.000Z',
+          startedAt: '2026-01-03T00:00:00.000Z',
+          completedAt: '2026-01-03T00:01:00.000Z',
+          uploadId: 'upload_3',
+          documentId: 'document_2',
+          reconciliationRequired: false,
+        },
+      ],
+      total: 2,
+    });
+  });
+
   it('keeps listing workflows when one active workflow cannot be polled', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));

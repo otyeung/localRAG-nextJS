@@ -508,6 +508,72 @@ describe('documents routes', () => {
     });
   });
 
+  it('lists scoped workflow status for requested documents only', async () => {
+    const request = new Request(
+      'https://app.example.com/api/workflows?documentIds=document_1&documentIds=document_2&pageSize=2',
+      {
+        headers: {
+          'x-request-id': 'req_workflows_filtered',
+        },
+      },
+    );
+
+    const response = await listWorkflowsRoute(request);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        items: [
+          {
+            id: 'workflow_1',
+            workflowKey: 'ingestion',
+            status: 'RUNNING',
+            errorMessage: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            completedAt: null,
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            reconciliationRequired: false,
+          },
+        ],
+        total: 1,
+      },
+    });
+    expect(routeMocks.listPublicWorkflows).toHaveBeenCalledWith('user_1', {
+      documentIds: ['document_1', 'document_2'],
+      pageSize: 2,
+    });
+  });
+
+  it('returns structured validation errors for invalid workflow list params', async () => {
+    const request = new Request('https://app.example.com/api/workflows?documentIds=%20%20&pageSize=999', {
+      headers: {
+        'x-request-id': 'req_workflows_invalid',
+      },
+    });
+
+    const response = await listWorkflowsRoute(request);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid workflow query parameters.',
+        requestId: 'req_workflows_invalid',
+        details: {
+          formErrors: [],
+          fieldErrors: {
+            documentIds: expect.any(Array),
+            pageSize: expect.any(Array),
+          },
+        },
+      },
+    });
+    expect(routeMocks.listPublicWorkflows).not.toHaveBeenCalled();
+  });
+
   it('applies the pre-provision guard before resolving workflow list users', async () => {
     const request = new Request('https://app.example.com/api/workflows', {
       headers: {
@@ -543,7 +609,7 @@ describe('documents routes', () => {
       errorMessage: 'Too many workflow requests.',
       namespace: 'workflows-api',
     });
-    expect(routeMocks.listPublicWorkflows).toHaveBeenCalledWith('user_1');
+    expect(routeMocks.listPublicWorkflows).toHaveBeenCalledWith('user_1', {});
   });
 
   it('applies the pre-provision guard before resolving workflow detail users', async () => {

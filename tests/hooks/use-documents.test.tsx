@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDocuments } from '@/hooks/use-documents';
@@ -34,7 +34,7 @@ describe('useDocuments', () => {
         );
       }
 
-      if (input === '/api/workflows') {
+      if (input === '/api/workflows?documentIds=document_1&pageSize=1') {
         return new Response(
           JSON.stringify({
             data: {
@@ -75,7 +75,7 @@ describe('useDocuments', () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    await result.current.reindexDocument.mutateAsync('document_1');
+    await result.current.queueReindexDocument('document_1');
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/documents/document_1', { method: 'PATCH' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents'] });
@@ -98,7 +98,7 @@ describe('useDocuments', () => {
         );
       }
 
-      if (input === '/api/workflows') {
+      if (input === '/api/workflows?documentIds=document_1&pageSize=1') {
         return new Response(
           JSON.stringify({
             data: {
@@ -138,12 +138,151 @@ describe('useDocuments', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    await expect(result.current.reindexDocument.mutateAsync('document_1')).rejects.toThrow(
+    await expect(result.current.queueReindexDocument('document_1')).rejects.toThrow(
       'Document ingestion started, but local state reconciliation is required.',
     );
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflows'] });
+  });
+
+  it('prevents duplicate re-index submissions for the same document while allowing other documents to continue', async () => {
+    let resolveDocumentOne: ((value: Response) => void) | undefined;
+    let resolveDocumentTwo: ((value: Response) => void) | undefined;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (input === '/api/documents?page=1&pageSize=20&sort=updatedAt&order=desc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'document_1',
+                  uploadId: 'upload_1',
+                  status: 'READY',
+                  title: 'Quarterly Report',
+                  originalFilename: 'quarterly-report.pdf',
+                  mimeType: 'application/pdf',
+                  fileSizeBytes: 1024,
+                  chunkCount: 12,
+                  createdAt: '2026-01-01T00:00:00.000Z',
+                  updatedAt: '2026-01-02T00:00:00.000Z',
+                  deletedAt: null,
+                },
+                {
+                  id: 'document_2',
+                  uploadId: 'upload_2',
+                  status: 'FAILED',
+                  title: 'Vendor Checklist',
+                  originalFilename: 'vendor-checklist.pdf',
+                  mimeType: 'application/pdf',
+                  fileSizeBytes: 2048,
+                  chunkCount: 4,
+                  createdAt: '2026-01-01T00:00:00.000Z',
+                  updatedAt: '2026-01-03T00:00:00.000Z',
+                  deletedAt: null,
+                },
+              ],
+              total: 2,
+              page: 1,
+              pageSize: 20,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/workflows?documentIds=document_1&documentIds=document_2&pageSize=2') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/documents/document_1' && init?.method === 'PATCH') {
+        return new Promise<Response>((resolve) => {
+          resolveDocumentOne = resolve;
+        });
+      }
+
+      if (input === '/api/documents/document_2' && init?.method === 'PATCH') {
+        return new Promise<Response>((resolve) => {
+          resolveDocumentTwo = resolve;
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const { result } = renderHook(() => useDocuments(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    let firstRequest: Promise<unknown> | undefined;
+    await act(async () => {
+      firstRequest = result.current.queueReindexDocument('document_1');
+    });
+
+    await waitFor(() =>
+      expect(Array.from(result.current.pendingReindexDocumentIds).sort()).toEqual(['document_1']),
+    );
+
+    await expect(result.current.queueReindexDocument('document_1')).resolves.toBeNull();
+
+    let secondRequest: Promise<unknown> | undefined;
+    await act(async () => {
+      secondRequest = result.current.queueReindexDocument('document_2');
+    });
+
+    await waitFor(() =>
+      expect(Array.from(result.current.pendingReindexDocumentIds).sort()).toEqual(['document_1', 'document_2']),
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/documents/document_1', { method: 'PATCH' });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/documents/document_2', { method: 'PATCH' });
+
+    resolveDocumentOne?.(
+      new Response(
+        JSON.stringify({
+          data: {
+            workflowExecutionId: 'workflow_1',
+            status: 'RUNNING',
+            reconciliationRequired: false,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    resolveDocumentTwo?.(
+      new Response(
+        JSON.stringify({
+          data: {
+            workflowExecutionId: 'workflow_2',
+            status: 'RUNNING',
+            reconciliationRequired: false,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    await expect(firstRequest).resolves.toMatchObject({ workflowExecutionId: 'workflow_1' });
+    await expect(secondRequest).resolves.toMatchObject({ workflowExecutionId: 'workflow_2' });
+    await waitFor(() => expect(Array.from(result.current.pendingReindexDocumentIds)).toEqual([]));
   });
 
   it('preserves the first workflow for each document when workflows are returned newest-first', async () => {
@@ -176,7 +315,7 @@ describe('useDocuments', () => {
         );
       }
 
-      if (input === '/api/workflows') {
+      if (input === '/api/workflows?documentIds=document_1&pageSize=1') {
         return new Response(
           JSON.stringify({
             data: {
@@ -327,7 +466,31 @@ describe('useDocuments', () => {
         );
       }
 
-      if (input === '/api/workflows') {
+      if (input === '/api/workflows?documentIds=document_1&pageSize=1') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/workflows?documentIds=document_1&documentIds=document_2&pageSize=2') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/workflows?documentIds=document_vendor&pageSize=1') {
         return new Response(
           JSON.stringify({
             data: {
@@ -373,6 +536,7 @@ describe('useDocuments', () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/documents?page=1&pageSize=40&sort=updatedAt&order=desc&query=vendor', undefined);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows?documentIds=document_vendor&pageSize=1', undefined);
     expect(result.current.hasNextPage).toBe(false);
   });
 });

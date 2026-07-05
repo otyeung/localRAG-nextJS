@@ -1,13 +1,17 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DocumentLibrary } from '@/components/documents/document-library';
 import type { DocumentRecord, WorkflowRecord } from '@/hooks/use-documents';
 
 describe('DocumentLibrary', () => {
-  it('enables re-index for eligible documents and surfaces loading and error states', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('disables each pending re-index independently and surfaces loading and error states', () => {
     const onReindex = vi.fn();
 
     render(
@@ -22,6 +26,19 @@ describe('DocumentLibrary', () => {
             mimeType: 'application/pdf',
             fileSizeBytes: 1024,
             chunkCount: 12,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
+          },
+          {
+            id: 'document_failed',
+            uploadId: 'upload_3',
+            status: 'FAILED',
+            title: 'Vendor Checklist',
+            originalFilename: 'vendor-checklist.pdf',
+            mimeType: 'application/pdf',
+            fileSizeBytes: 4096,
+            chunkCount: 0,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
             deletedAt: null,
@@ -67,20 +84,23 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex,
-        reindexingDocumentId: 'document_ready',
+        pendingReindexDocumentIds: new Set(['document_ready', 'document_failed']),
         reindexError: 'Unable to queue re-index.',
       }),
     );
 
     const readyButton = screen.getByRole('button', { name: 'Re-index Quarterly Report' });
+    const failedButton = screen.getByRole('button', { name: 'Re-index Vendor Checklist' });
     const ingestingButton = screen.getByRole('button', { name: 'Re-index Draft Contract' });
 
     expect(readyButton).toBeDisabled();
-    expect(screen.getByText('Re-indexing…')).toBeInTheDocument();
+    expect(failedButton).toBeDisabled();
+    expect(screen.getAllByText('Re-indexing…')).toHaveLength(2);
     expect(ingestingButton).toBeDisabled();
     expect(screen.getByText('Unable to queue re-index.')).toBeInTheDocument();
 
     fireEvent.click(readyButton);
+    fireEvent.click(failedButton);
     expect(onReindex).not.toHaveBeenCalled();
   });
 
@@ -114,7 +134,7 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex,
-        reindexingDocumentId: null,
+        pendingReindexDocumentIds: new Set<string>(),
         reindexError: null,
       }),
     );
@@ -165,12 +185,12 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex: vi.fn(),
-        reindexingDocumentId: null,
+        pendingReindexDocumentIds: new Set<string>(),
         reindexError: null,
       }),
     );
 
-    expect(screen.getAllByText('12 chunks')).toHaveLength(2);
+    expect(screen.getAllByText('12 chunks')).toHaveLength(1);
     expect(screen.getAllByText('0 chunks').length).toBeGreaterThan(0);
     expect(screen.queryByText('Pending pipeline telemetry')).not.toBeInTheDocument();
   });
@@ -205,7 +225,7 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex: vi.fn(),
-        reindexingDocumentId: null,
+        pendingReindexDocumentIds: new Set<string>(),
         reindexError: null,
         totalDocuments: 48,
         hasMoreDocuments: true,
@@ -234,7 +254,7 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex: vi.fn(),
-        reindexingDocumentId: null,
+        pendingReindexDocumentIds: new Set<string>(),
         reindexError: null,
         isLoadingDocuments: true,
       }),
@@ -256,7 +276,7 @@ describe('DocumentLibrary', () => {
         onSortChange: vi.fn(),
         onDelete: vi.fn(),
         onReindex: vi.fn(),
-        reindexingDocumentId: null,
+        pendingReindexDocumentIds: new Set<string>(),
         reindexError: null,
         isLoadingDocuments: false,
         documentsError: 'Document library is unavailable.',
@@ -294,7 +314,7 @@ describe('DocumentLibrary', () => {
       onSortChange: vi.fn(),
       onDelete: vi.fn(),
       onReindex: vi.fn(),
-      reindexingDocumentId: null,
+      pendingReindexDocumentIds: new Set<string>(),
       reindexError: null,
     };
 

@@ -73,6 +73,14 @@ export function AppShell() {
     setActiveConversationId(nextConversation.id);
   };
 
+  const handleDocumentReindex = async (id: string) => {
+    try {
+      await documents.queueReindexDocument(id);
+    } catch {
+      // The document library already renders the latest mutation error state.
+    }
+  };
+
   const healthLabel = health.data?.label ?? (health.isLoading ? 'Checking' : 'Pending Task 9');
   const healthTone =
     health.data?.status === 'healthy'
@@ -164,8 +172,8 @@ export function AppShell() {
                   onStatusFilterChange={setDocumentStatus}
                   onSortChange={setDocumentSort}
                   onDelete={(id) => documents.deleteDocument.mutate(id)}
-                  onReindex={(id) => documents.reindexDocument.mutate(id)}
-                  reindexingDocumentId={documents.reindexDocument.isPending ? documents.reindexDocument.variables : null}
+                  onReindex={handleDocumentReindex}
+                  pendingReindexDocumentIds={documents.pendingReindexDocumentIds}
                   reindexError={documents.reindexDocument.error?.message ?? null}
                 />
               </>
