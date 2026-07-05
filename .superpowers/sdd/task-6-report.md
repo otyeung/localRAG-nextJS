@@ -109,3 +109,16 @@ Latest verification passed:
 ## Task 6 Public API Boundary Result
 - 5 test files passed / 31 tests passed.
 - `tsc --noEmit` passed.
+
+## Task 6 Workflow / Audit Review Fixes
+- Updated `WorkflowService.listWorkflows()` to reconcile active queued/running/waiting executions through a shared helper before returning list data, while preventing older workflow rows from overwriting newer document/upload state during reconciliation.
+- Added transactional audit logging for upload ingestion start failures, upload reconciliation-required fallbacks, reindex start failures, and reindex reconciliation-required fallbacks.
+- Extended unit coverage for workflow-list reconciliation, latest-workflow resource sync protection, and the four new audit-log mutation paths.
+
+## Task 6 Workflow / Audit Verification
+- `pnpm vitest run tests/unit/upload-validation.test.ts tests/unit/document-services.test.ts tests/api/upload-route.test.ts tests/api/documents-route.test.ts tests/integration/seed-corpus.test.ts`
+- `pnpm typecheck`
+
+## Task 6 Workflow / Audit Result
+- 5 test files passed / 39 tests passed.
+- `tsc --noEmit` passed.

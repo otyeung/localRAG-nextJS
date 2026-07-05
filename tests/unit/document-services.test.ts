@@ -159,7 +159,7 @@ describe('document services', () => {
   });
 
   it('removes persisted temp files when ingestion fails after transactional record creation', async () => {
-    const tx = {
+    const createTx = {
       upload: {
         create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
       },
@@ -170,8 +170,27 @@ describe('document services', () => {
         create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
       },
     };
+    const failureTx = {
+      upload: {
+        update: vi.fn().mockResolvedValue({ id: 'upload_1', status: UploadStatus.FAILED }),
+      },
+      document: {
+        update: vi.fn().mockResolvedValue({ id: 'document_1', status: DocumentStatus.FAILED }),
+      },
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({ id: 'workflow_1', status: WorkflowStatus.ERROR }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const db = {
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof failureTx) => Promise<unknown>) =>
+          callback(failureTx),
+        ),
       upload: {
         update: vi.fn().mockResolvedValue({ id: 'upload_1', status: UploadStatus.FAILED }),
       },
@@ -213,22 +232,22 @@ describe('document services', () => {
       code: 'UPSTREAM_ERROR',
     });
 
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(tx.upload.create).toHaveBeenCalledOnce();
-    expect(db.upload.update).toHaveBeenCalledWith({
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(createTx.upload.create).toHaveBeenCalledOnce();
+    expect(failureTx.upload.update).toHaveBeenCalledWith({
       where: { id: 'upload_1' },
       data: {
         status: UploadStatus.FAILED,
         errorMessage: 'n8n unavailable',
       },
     });
-    expect(db.document.update).toHaveBeenCalledWith({
+    expect(failureTx.document.update).toHaveBeenCalledWith({
       where: { id: 'document_1' },
       data: {
         status: 'FAILED',
       },
     });
-    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+    expect(failureTx.workflowExecution.update).toHaveBeenCalledWith({
       where: { id: 'workflow_1' },
       data: {
         status: WorkflowStatus.ERROR,
@@ -237,6 +256,187 @@ describe('document services', () => {
     });
     expect(existsSync(uploadTestDirectory)).toBe(true);
     expect(readdirSync(uploadTestDirectory)).toHaveLength(0);
+  });
+
+  it('records an audit event when ingestion fails to start after upload records are created', async () => {
+    const createTx = {
+      upload: {
+        create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
+      },
+      document: {
+        create: vi.fn().mockResolvedValue({ id: 'document_1' }),
+      },
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
+      },
+    };
+    const failureTx = {
+      upload: {
+        update: vi.fn().mockResolvedValue({ id: 'upload_1', status: UploadStatus.FAILED }),
+      },
+      document: {
+        update: vi.fn().mockResolvedValue({ id: 'document_1', status: DocumentStatus.FAILED }),
+      },
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({ id: 'workflow_1', status: WorkflowStatus.ERROR }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof failureTx) => Promise<unknown>) =>
+          callback(failureTx),
+        ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const service = new UploadService({
+      db: db as never,
+      validationService: {
+        validate: vi.fn().mockResolvedValue({
+          normalizedExtension: 'pdf',
+          normalizedMimeType: 'application/pdf',
+        }),
+      } as never,
+      virusScanService: {
+        scanFile: vi.fn().mockResolvedValue({ clean: true, scanner: 'local-noop' }),
+      } as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
+      } as never,
+      uploadConfig: {
+        maxBytes: 10_000_000,
+        tempDirectory: uploadTestDirectory,
+      },
+    });
+
+    await expect(
+      service.createUpload({
+        userId: 'user_1',
+        fileName: 'Quarterly Report.PDF',
+        mimeType: 'application/pdf',
+        bytes: Buffer.from('hello world'),
+        requestId: 'req_upload',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+      }),
+    ).rejects.toMatchObject({
+      code: 'UPSTREAM_ERROR',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(failureTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'upload.ingestion_start_failed',
+        entityType: 'upload',
+        entityId: 'upload_1',
+        requestId: 'req_upload',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: {
+          documentId: 'document_1',
+          workflowExecutionId: 'workflow_1',
+          error: 'n8n unavailable',
+        },
+      },
+    });
+  });
+
+  it('preserves upload failure state when the start-failure audit write fails', async () => {
+    const createTx = {
+      upload: {
+        create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
+      },
+      document: {
+        create: vi.fn().mockResolvedValue({ id: 'document_1' }),
+      },
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
+      },
+    };
+    const failureTx = {
+      upload: {
+        update: vi.fn().mockResolvedValue({ id: 'upload_1', status: UploadStatus.FAILED }),
+      },
+      document: {
+        update: vi.fn().mockResolvedValue({ id: 'document_1', status: DocumentStatus.FAILED }),
+      },
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({ id: 'workflow_1', status: WorkflowStatus.ERROR }),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(new Error('audit write failed')),
+      },
+    };
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof failureTx) => Promise<unknown>) =>
+          callback(failureTx),
+        ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const service = new UploadService({
+      db: db as never,
+      validationService: {
+        validate: vi.fn().mockResolvedValue({
+          normalizedExtension: 'pdf',
+          normalizedMimeType: 'application/pdf',
+        }),
+      } as never,
+      virusScanService: {
+        scanFile: vi.fn().mockResolvedValue({ clean: true, scanner: 'local-noop' }),
+      } as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
+      } as never,
+      uploadConfig: {
+        maxBytes: 10_000_000,
+        tempDirectory: uploadTestDirectory,
+      },
+    });
+
+    await expect(
+      service.createUpload({
+        userId: 'user_1',
+        fileName: 'Quarterly Report.PDF',
+        mimeType: 'application/pdf',
+        bytes: Buffer.from('hello world'),
+      }),
+    ).rejects.toMatchObject({
+      code: 'UPSTREAM_ERROR',
+    });
+
+    expect(failureTx.upload.update).toHaveBeenCalledOnce();
+    expect(failureTx.document.update).toHaveBeenCalledOnce();
+    expect(failureTx.workflowExecution.update).toHaveBeenCalledOnce();
   });
 
   it('returns reconciliation-needed upload handles when post-start persistence fails after n8n accepts the upload', async () => {
@@ -252,11 +452,31 @@ describe('document services', () => {
       },
     };
     const acceptedStatusError = new Error('audit write failed');
+    const reconciliationTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const db = {
       $transaction: vi
         .fn()
         .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
-        .mockRejectedValueOnce(acceptedStatusError),
+        .mockRejectedValueOnce(acceptedStatusError)
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        ),
       upload: {
         update: vi.fn(),
       },
@@ -319,7 +539,7 @@ describe('document services', () => {
       reconciliationRequired: true,
     });
 
-    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(db.$transaction).toHaveBeenCalledTimes(3);
     expect(db.upload.update).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: UploadStatus.FAILED }),
@@ -330,7 +550,7 @@ describe('document services', () => {
         data: expect.objectContaining({ status: DocumentStatus.FAILED }),
       }),
     );
-    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
       where: { id: 'workflow_1' },
       data: {
         externalExecutionId: 'exec_123',
@@ -344,6 +564,131 @@ describe('document services', () => {
     });
     expect(existsSync(uploadTestDirectory)).toBe(true);
     expect(readdirSync(uploadTestDirectory)).toHaveLength(1);
+  });
+
+  it('records an audit event when upload reconciliation is required after ingestion starts', async () => {
+    const createTx = {
+      upload: {
+        create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
+      },
+      document: {
+        create: vi.fn().mockResolvedValue({ id: 'document_1' }),
+      },
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
+      },
+    };
+    const reconciliationTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const acceptedStatusError = new Error('audit write failed');
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockRejectedValueOnce(acceptedStatusError)
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const service = new UploadService({
+      db: db as never,
+      validationService: {
+        validate: vi.fn().mockResolvedValue({
+          normalizedExtension: 'pdf',
+          normalizedMimeType: 'application/pdf',
+        }),
+      } as never,
+      virusScanService: {
+        scanFile: vi.fn().mockResolvedValue({ clean: true, scanner: 'local-noop' }),
+      } as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockResolvedValue({
+          executionId: 'exec_123',
+          workflowId: 'workflow_123',
+          status: 'running',
+        }),
+      } as never,
+      uploadConfig: {
+        maxBytes: 10_000_000,
+        tempDirectory: uploadTestDirectory,
+      },
+    });
+
+    await expect(
+      service.createUpload({
+        userId: 'user_1',
+        fileName: 'Quarterly Report.PDF',
+        mimeType: 'application/pdf',
+        bytes: Buffer.from('hello world'),
+        requestId: 'req_upload',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+      }),
+    ).resolves.toMatchObject({
+      uploadId: 'upload_1',
+      workflowExecutionId: 'workflow_1',
+      externalExecutionId: 'exec_123',
+      status: 'RUNNING',
+      reconciliationRequired: true,
+    });
+
+    expect(db.$transaction).toHaveBeenCalledTimes(3);
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        externalExecutionId: 'exec_123',
+        status: WorkflowStatus.RUNNING,
+        metadata: {
+          workflowId: 'workflow_123',
+          reconciliationRequired: true,
+          localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(reconciliationTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'upload.ingestion_reconciliation_required',
+        entityType: 'upload',
+        entityId: 'upload_1',
+        requestId: 'req_upload',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: {
+          documentId: 'document_1',
+          workflowExecutionId: 'workflow_1',
+          externalExecutionId: 'exec_123',
+          error: 'audit write failed',
+        },
+      },
+    });
   });
 
   it('uses unique temp storage paths for same-name uploads', async () => {
@@ -703,6 +1048,23 @@ describe('document services', () => {
 
   it('preserves accepted reindex executions when post-start persistence fails', async () => {
     const persistenceError = new Error('audit write failed');
+    const reconciliationTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const db = {
       workflowExecution: {
         create: vi.fn().mockResolvedValue({
@@ -736,7 +1098,12 @@ describe('document services', () => {
       auditLog: {
         create: vi.fn(),
       },
-      $transaction: vi.fn().mockRejectedValue(persistenceError),
+      $transaction: vi
+        .fn()
+        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        ),
     };
     const ingestionService = {
       startDocumentIngestion: vi.fn().mockResolvedValue({
@@ -754,8 +1121,8 @@ describe('document services', () => {
       code: 'INTERNAL_ERROR',
     });
 
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
       where: { id: 'workflow_1' },
       data: {
         externalExecutionId: 'exec_123',
@@ -772,6 +1139,244 @@ describe('document services', () => {
         data: expect.objectContaining({ status: DocumentStatus.FAILED }),
       }),
     );
+  });
+
+  it('records an audit event when reindex ingestion fails to start', async () => {
+    const failureTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.ERROR,
+          errorMessage: 'n8n unavailable',
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+        }),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn(async (callback: (transaction: typeof failureTx) => Promise<unknown>) => callback(failureTx)),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
+      } as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'UPSTREAM_ERROR',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(failureTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        status: WorkflowStatus.ERROR,
+        errorMessage: 'n8n unavailable',
+      },
+    });
+    expect(failureTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'document.reindex_start_failed',
+        entityType: 'document',
+        entityId: 'document_1',
+        requestId: 'req_reindex',
+        metadata: {
+          workflowExecutionId: 'workflow_1',
+          uploadId: 'upload_1',
+          error: 'n8n unavailable',
+        },
+      },
+    });
+  });
+
+  it('records an audit event when reindex reconciliation is required after ingestion starts', async () => {
+    const reconciliationTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const persistenceError = new Error('audit write failed');
+    const db = {
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+        }),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi
+        .fn()
+        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        ),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockResolvedValue({
+          executionId: 'exec_123',
+          workflowId: 'workflow_123',
+          status: 'running',
+        }),
+      } as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        externalExecutionId: 'exec_123',
+        status: WorkflowStatus.RUNNING,
+        metadata: {
+          workflowId: 'workflow_123',
+          reconciliationRequired: true,
+          localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(reconciliationTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'document.reindex_reconciliation_required',
+        entityType: 'document',
+        entityId: 'document_1',
+        requestId: 'req_reindex',
+        metadata: {
+          workflowExecutionId: 'workflow_1',
+          externalExecutionId: 'exec_123',
+          uploadId: 'upload_1',
+          error: 'audit write failed',
+        },
+      },
+    });
+  });
+
+  it('preserves reindex reconciliation state when the audit write fails', async () => {
+    const reconciliationTx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(new Error('audit insert failed')),
+      },
+    };
+    const persistenceError = new Error('audit write failed');
+    const db = {
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+        }),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi
+        .fn()
+        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        ),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockResolvedValue({
+          executionId: 'exec_123',
+          workflowId: 'workflow_123',
+          status: 'running',
+        }),
+      } as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledOnce();
+    expect(reconciliationTx.auditLog.create).toHaveBeenCalledOnce();
   });
 
   it('reconciles resource statuses for accepted workflows that already completed remotely', async () => {
@@ -917,6 +1522,211 @@ describe('document services', () => {
     });
   });
 
+  it('reconciles active workflows before returning the public workflow list', async () => {
+    const db = {
+      workflowExecution: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'workflow_1',
+            userId: 'user_1',
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.RUNNING,
+            externalExecutionId: 'exec_123',
+            requestPayload: { prompt: 'secret' },
+            responsePayload: null,
+            metadata: null,
+            errorMessage: null,
+            startedAt: new Date('2026-01-01T00:00:00.000Z'),
+            completedAt: null,
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          requestPayload: { prompt: 'secret' },
+          responsePayload: null,
+          metadata: null,
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: { prompt: 'secret' },
+          responsePayload: { ok: true },
+          metadata: null,
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+      },
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const executionService = {
+      pollExecution: vi.fn().mockResolvedValue({
+        id: 'exec_123',
+        workflowId: 'workflow_123',
+        status: 'success',
+        rawStatus: 'success',
+        finished: true,
+        mode: 'manual',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        stoppedAt: '2026-01-01T00:01:00.000Z',
+        waitTill: null,
+        retryOf: null,
+        data: { ok: true },
+      }),
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: executionService as never,
+    });
+
+    const result = await service.listPublicWorkflows('user_1');
+
+    expect(executionService.pollExecution).toHaveBeenCalledWith('exec_123');
+    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        status: WorkflowStatus.SUCCESS,
+        startedAt: new Date('2026-01-01T00:00:00.000Z'),
+        completedAt: new Date('2026-01-01T00:01:00.000Z'),
+        errorMessage: null,
+        responsePayload: { ok: true },
+      },
+    });
+    expect(result).toEqual({
+      items: [
+        {
+          id: 'workflow_1',
+          workflowKey: 'ingestion',
+          status: 'SUCCESS',
+          errorMessage: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          startedAt: '2026-01-01T00:00:00.000Z',
+          completedAt: '2026-01-01T00:01:00.000Z',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          reconciliationRequired: false,
+        },
+      ],
+      total: 1,
+    });
+  });
+
+  it('does not let older workflow executions overwrite newer resource state during list reconciliation', async () => {
+    const olderWorkflow = {
+      id: 'workflow_old',
+      userId: 'user_1',
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      workflowKey: 'ingestion',
+      status: WorkflowStatus.SUCCESS,
+      externalExecutionId: 'exec_old',
+      requestPayload: null,
+      responsePayload: { ok: true },
+      metadata: { reconciliationRequired: true },
+      errorMessage: null,
+      startedAt: new Date('2026-01-01T00:00:00.000Z'),
+      completedAt: new Date('2026-01-01T00:01:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+    };
+    const newerWorkflow = {
+      id: 'workflow_new',
+      userId: 'user_1',
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      workflowKey: 'ingestion',
+      status: WorkflowStatus.RUNNING,
+      externalExecutionId: 'exec_new',
+      requestPayload: null,
+      responsePayload: null,
+      metadata: null,
+      errorMessage: null,
+      startedAt: new Date('2026-01-02T00:00:00.000Z'),
+      completedAt: null,
+      createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+    };
+    const db = {
+      workflowExecution: {
+        findMany: vi.fn().mockResolvedValue([newerWorkflow, olderWorkflow]),
+        count: vi.fn().mockResolvedValue(2),
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(newerWorkflow)
+          .mockResolvedValueOnce(newerWorkflow),
+        update: vi.fn().mockResolvedValue(newerWorkflow),
+      },
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const executionService = {
+      pollExecution: vi.fn().mockResolvedValue({
+        id: 'exec_new',
+        workflowId: 'workflow_123',
+        status: 'running',
+        rawStatus: 'running',
+        finished: false,
+        mode: 'manual',
+        startedAt: '2026-01-02T00:00:00.000Z',
+        stoppedAt: null,
+        waitTill: null,
+        retryOf: null,
+        data: null,
+      }),
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: executionService as never,
+    });
+
+    await service.listPublicWorkflows('user_1');
+
+    expect(db.workflowExecution.findFirst).toHaveBeenCalledTimes(2);
+    expect(db.upload.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.upload.updateMany).toHaveBeenCalledWith({
+      where: { id: 'upload_1', userId: 'user_1' },
+      data: { status: UploadStatus.INGESTING },
+    });
+    expect(db.document.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.document.updateMany).toHaveBeenCalledWith({
+      where: { id: 'document_1', userId: 'user_1' },
+      data: { status: DocumentStatus.INGESTING },
+    });
+  });
+
   it('maps workflow responses to a sanitized public DTO', async () => {
     const db = {
       workflowExecution: {
@@ -943,6 +1753,26 @@ describe('document services', () => {
           },
         ]),
         count: vi.fn().mockResolvedValue(1),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: { prompt: 'secret' },
+          responsePayload: { ok: true },
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
       },
       upload: {
         updateMany: vi.fn(),

@@ -115,6 +115,10 @@ function isReconciliationRequired(metadata: unknown): boolean {
   return metadata instanceof Object && 'reconciliationRequired' in metadata && metadata.reconciliationRequired === true;
 }
 
+function isActiveWorkflowStatus(status: WorkflowStatus): boolean {
+  return status === WorkflowStatus.RUNNING || status === WorkflowStatus.WAITING || status === WorkflowStatus.QUEUED;
+}
+
 export class WorkflowService {
   constructor(
     private readonly dependencies: {
@@ -142,8 +146,10 @@ export class WorkflowService {
       }),
     ]);
 
+    const reconciledItems = await Promise.all(items.map(async (workflow) => this.reconcileWorkflow(userId, workflow)));
+
     return {
-      items: items.map(toWorkflowDto),
+      items: reconciledItems.map(toWorkflowDto),
       total,
     };
   }
@@ -169,16 +175,19 @@ export class WorkflowService {
       throw new AppError('NOT_FOUND', 'Workflow execution not found.');
     }
 
-    if (
-      workflow.externalExecutionId &&
-      (workflow.status === WorkflowStatus.RUNNING ||
-        workflow.status === WorkflowStatus.WAITING ||
-        workflow.status === WorkflowStatus.QUEUED)
-    ) {
+    return toWorkflowDto(await this.reconcileWorkflow(userId, workflow));
+  }
+
+  async getPublicWorkflowStatus(userId: string, workflowExecutionId: string): Promise<PublicWorkflowExecutionDto> {
+    return toPublicWorkflowExecutionDto(await this.getWorkflowStatus(userId, workflowExecutionId));
+  }
+
+  private async reconcileWorkflow(userId: string, workflow: WorkflowExecution): Promise<WorkflowExecution> {
+    if (workflow.externalExecutionId && isActiveWorkflowStatus(workflow.status)) {
       const execution = await this.executionService.pollExecution(workflow.externalExecutionId);
       const nextStatus = mapN8nStatusToWorkflowStatus(execution.status);
 
-      const updated = await this.db.workflowExecution.update({
+      const updatedWorkflow = await this.db.workflowExecution.update({
         where: { id: workflow.id },
         data: {
           status: nextStatus,
@@ -189,19 +198,36 @@ export class WorkflowService {
         },
       });
 
-      await this.syncResourceStatuses(userId, updated);
-      return toWorkflowDto(updated);
+      if (await this.shouldSyncResourceStatuses(userId, updatedWorkflow)) {
+        await this.syncResourceStatuses(userId, updatedWorkflow);
+      }
+      return updatedWorkflow;
     }
 
     if (isReconciliationRequired(workflow.metadata)) {
-      await this.syncResourceStatuses(userId, workflow);
+      if (await this.shouldSyncResourceStatuses(userId, workflow)) {
+        await this.syncResourceStatuses(userId, workflow);
+      }
     }
 
-    return toWorkflowDto(workflow);
+    return workflow;
   }
 
-  async getPublicWorkflowStatus(userId: string, workflowExecutionId: string): Promise<PublicWorkflowExecutionDto> {
-    return toPublicWorkflowExecutionDto(await this.getWorkflowStatus(userId, workflowExecutionId));
+  private async shouldSyncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<boolean> {
+    if (!workflow.documentId && !workflow.uploadId) {
+      return true;
+    }
+
+    const latestWorkflow = await this.db.workflowExecution.findFirst({
+      where: {
+        userId,
+        workflowKey: workflow.workflowKey,
+        ...(workflow.documentId ? { documentId: workflow.documentId } : { uploadId: workflow.uploadId }),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    return !latestWorkflow || latestWorkflow.id === workflow.id;
   }
 
   private async syncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<void> {

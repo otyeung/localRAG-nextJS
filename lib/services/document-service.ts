@@ -270,12 +270,30 @@ export class DocumentService {
         requestId,
       });
     } catch (error) {
-      await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          status: WorkflowStatus.ERROR,
-          errorMessage: errorMessage(error),
-        },
+      const failureMessage = errorMessage(error);
+      await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+        await transaction.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            status: WorkflowStatus.ERROR,
+            errorMessage: failureMessage,
+          },
+        });
+
+        await transaction.auditLog.create({
+          data: {
+            userId,
+            action: 'document.reindex_start_failed',
+            entityType: 'document',
+            entityId: document.id,
+            requestId,
+            metadata: {
+              workflowExecutionId: workflow.id,
+              uploadId: document.uploadId,
+              error: failureMessage,
+            },
+          },
+        }).catch(() => undefined);
       });
 
       throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
@@ -327,17 +345,36 @@ export class DocumentService {
         status: updatedWorkflow.status,
       };
     } catch (error) {
-      await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          externalExecutionId: startResult.executionId,
-          status: nextWorkflowStatus,
-          metadata: {
-            workflowId: startResult.workflowId,
-            reconciliationRequired: true,
-            localPersistenceError: errorMessage(error),
+      const localPersistenceError = errorMessage(error);
+      await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+        await transaction.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            externalExecutionId: startResult.executionId,
+            status: nextWorkflowStatus,
+            metadata: {
+              workflowId: startResult.workflowId,
+              reconciliationRequired: true,
+              localPersistenceError,
+            },
           },
-        },
+        });
+
+        await transaction.auditLog.create({
+          data: {
+            userId,
+            action: 'document.reindex_reconciliation_required',
+            entityType: 'document',
+            entityId: document.id,
+            requestId,
+            metadata: {
+              workflowExecutionId: workflow.id,
+              externalExecutionId: startResult.executionId,
+              uploadId: document.uploadId,
+              error: localPersistenceError,
+            },
+          },
+        }).catch(() => undefined);
       });
 
       throw new AppError(

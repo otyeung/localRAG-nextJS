@@ -17,6 +17,7 @@ import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 type UploadDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
 type UploadTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
 type AcceptedUploadStateTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
+type UploadReconciliationTransactionDb = Pick<typeof prisma, 'workflowExecution' | 'auditLog'>;
 type TransactionRunner = Pick<PrismaClient, '$transaction'>;
 
 export type CreateUploadInput = {
@@ -200,28 +201,49 @@ export class UploadService {
         requestId: input.requestId,
       });
     } catch (error) {
-      await Promise.all([
-        this.db.upload.update({
+      const failureMessage = errorMessage(error);
+      await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) => {
+        await transaction.upload.update({
           where: { id: upload.id },
           data: {
             status: UploadStatus.FAILED,
-            errorMessage: errorMessage(error),
+            errorMessage: failureMessage,
           },
-        }),
-        this.db.document.update({
+        });
+
+        await transaction.document.update({
           where: { id: document.id },
           data: {
             status: 'FAILED',
           },
-        }),
-        this.db.workflowExecution.update({
+        });
+
+        await transaction.workflowExecution.update({
           where: { id: workflow.id },
           data: {
             status: WorkflowStatus.ERROR,
-            errorMessage: errorMessage(error),
+            errorMessage: failureMessage,
           },
-        }),
-      ]);
+        });
+
+        await transaction.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'upload.ingestion_start_failed',
+            entityType: 'upload',
+            entityId: upload.id,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: {
+              documentId: document.id,
+              workflowExecutionId: workflow.id,
+              error: failureMessage,
+            },
+          },
+        }).catch(() => undefined);
+      });
+
       await this.removeTempFile(storagePath);
       throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
     }
@@ -287,18 +309,43 @@ export class UploadService {
         reconciliationRequired: false,
       };
     } catch (error) {
-      const reconciledWorkflow = await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          externalExecutionId: startResult.executionId,
-          status: nextWorkflowStatus,
-          metadata: {
-            workflowId: startResult.workflowId,
-            reconciliationRequired: true,
-            localPersistenceError: errorMessage(error),
-          },
+      const localPersistenceError = errorMessage(error);
+      const reconciledWorkflow = await this.transactionRunner.$transaction(
+        async (transaction: UploadReconciliationTransactionDb) => {
+          const updatedWorkflow = await transaction.workflowExecution.update({
+            where: { id: workflow.id },
+            data: {
+              externalExecutionId: startResult.executionId,
+              status: nextWorkflowStatus,
+              metadata: {
+                workflowId: startResult.workflowId,
+                reconciliationRequired: true,
+                localPersistenceError,
+              },
+            },
+          });
+
+          await transaction.auditLog.create({
+            data: {
+              userId: input.userId,
+              action: 'upload.ingestion_reconciliation_required',
+              entityType: 'upload',
+              entityId: upload.id,
+              requestId: input.requestId,
+              ipAddress: input.ipAddress,
+              userAgent: input.userAgent,
+              metadata: {
+                documentId: document.id,
+                workflowExecutionId: workflow.id,
+                externalExecutionId: startResult.executionId,
+                error: localPersistenceError,
+              },
+            },
+          }).catch(() => undefined);
+
+          return updatedWorkflow;
         },
-      });
+      );
 
       return {
         uploadId: upload.id,
