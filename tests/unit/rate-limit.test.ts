@@ -77,4 +77,34 @@ describe('rateLimit', () => {
 
     expect(getRateLimitBucketCountForTests()).toBe(3);
   });
+
+  it('preserves active victim buckets when attacker churn fills capacity', async () => {
+    const policy = { limit: 1, windowMs: 10_000, maxBuckets: 3 };
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.000Z'));
+
+    await rateLimit('victim', policy);
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.100Z'));
+    await rateLimit('attacker-1', policy);
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.200Z'));
+    await rateLimit('attacker-2', policy);
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.300Z'));
+    await expect(rateLimit('attacker-3', policy)).resolves.toMatchObject({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date('2026-07-05T00:00:10.300Z'),
+    });
+
+    expect(getRateLimitBucketCountForTests()).toBe(3);
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.400Z'));
+    await expect(rateLimit('victim', policy)).resolves.toMatchObject({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date('2026-07-05T00:00:10.000Z'),
+    });
+  });
 });
