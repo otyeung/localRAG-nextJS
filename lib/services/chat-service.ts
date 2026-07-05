@@ -89,8 +89,13 @@ function buildSearchText(values: string[]): string {
   return merged.slice(0, 10_000);
 }
 
-function getLatestNonEmptyUserMessage(messages: AppUiMessage[]): AppUiMessage | undefined {
-  return [...messages].reverse().find((message) => message.role === 'user' && extractMessageText(message).trim().length > 0);
+function getLatestSubmittedUserMessage(messages: AppUiMessage[]): AppUiMessage | undefined {
+  const latestMessage = messages.at(-1);
+  if (!latestMessage || latestMessage.role !== 'user') {
+    return undefined;
+  }
+
+  return extractMessageText(latestMessage).trim().length > 0 ? latestMessage : undefined;
 }
 
 function toLatestUserAgentInput(text: string): AgentInputItem[] {
@@ -216,10 +221,10 @@ export class ChatService {
       throw new AppError('BAD_REQUEST', 'System messages must be defined server-side.');
     }
 
-    const latestUserMessage = getLatestNonEmptyUserMessage(input.messages);
+    const latestUserMessage = getLatestSubmittedUserMessage(input.messages);
     const latestUserText = latestUserMessage ? extractMessageText(latestUserMessage).trim() : '';
     if (!latestUserText) {
-      throw new AppError('BAD_REQUEST', 'A non-empty user message is required.');
+      throw new AppError('BAD_REQUEST', 'The latest submitted message must be a non-empty user message.');
     }
     const agentInput = toLatestUserAgentInput(latestUserText);
 

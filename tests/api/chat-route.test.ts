@@ -225,6 +225,31 @@ describe('chat route', () => {
     expect(routeMocks.streamChat).not.toHaveBeenCalled();
   });
 
+  it('returns a structured bad request error for malformed JSON bodies', async () => {
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'content-type': 'application/json',
+        'x-request-id': 'req_chat_bad_json',
+      },
+      body: '{',
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid JSON body.',
+        requestId: 'req_chat_bad_json',
+      },
+    });
+    expect(routeMocks.streamChat).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed messages with structured validation errors', async () => {
     const request = new Request('https://app.example.com/api/chat', {
       method: 'POST',

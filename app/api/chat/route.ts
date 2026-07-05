@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError } from '@/lib/http/api-response';
-import { validateWithSchema } from '@/lib/http/route-validation';
+import { parseJsonBody, validateWithSchema } from '@/lib/http/route-validation';
 import { appUiMessageSchema } from '@/lib/openai/ui-messages';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
@@ -42,7 +42,7 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    const body = validateWithSchema(chatRequestSchema, await request.json(), 'Invalid chat request payload.');
+    const body = validateWithSchema(chatRequestSchema, await parseJsonBody(request), 'Invalid chat request payload.');
     if (body.messages.some((message) => message.role === 'system')) {
       throw new AppError('BAD_REQUEST', 'System messages must be defined server-side.');
     }

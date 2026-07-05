@@ -191,6 +191,32 @@ describe('conversations routes', () => {
     });
   });
 
+  it('returns a structured bad request error for malformed conversation JSON', async () => {
+    const request = new Request('https://app.example.com/api/conversations', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'content-type': 'application/json',
+        'x-request-id': 'req_conversation_bad_json',
+      },
+      body: '{',
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid JSON body.',
+        requestId: 'req_conversation_bad_json',
+      },
+    });
+    expect(routeMocks.conversationCreate).not.toHaveBeenCalled();
+    expect(routeMocks.auditLogCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid conversation updates with structured validation errors', async () => {
     routeMocks.conversationFindFirst.mockResolvedValue({
       id: 'conversation_1',
@@ -234,6 +260,35 @@ describe('conversations routes', () => {
         },
       },
     });
+    expect(routeMocks.conversationUpdate).not.toHaveBeenCalled();
+    expect(routeMocks.auditLogCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns a structured bad request error for malformed conversation patch JSON', async () => {
+    const request = new Request('https://app.example.com/api/conversations/conversation_1', {
+      method: 'PATCH',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'content-type': 'application/json',
+        'x-request-id': 'req_conversation_patch_bad_json',
+      },
+      body: '{',
+    });
+
+    const response = await PATCH(request, {
+      params: Promise.resolve({ id: 'conversation_1' }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid JSON body.',
+        requestId: 'req_conversation_patch_bad_json',
+      },
+    });
+    expect(routeMocks.conversationFindFirst).not.toHaveBeenCalled();
     expect(routeMocks.conversationUpdate).not.toHaveBeenCalled();
     expect(routeMocks.auditLogCreate).not.toHaveBeenCalled();
   });

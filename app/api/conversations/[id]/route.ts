@@ -6,7 +6,7 @@ import { setConversationTitleSource } from '@/lib/conversations/title-source';
 import { prisma } from '@/lib/db/prisma';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
-import { validateWithSchema } from '@/lib/http/route-validation';
+import { parseJsonBody, validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
@@ -189,7 +189,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       });
     }
 
-    const body = validateWithSchema(patchConversationSchema, await request.json(), 'Invalid conversation payload.');
+    const body = validateWithSchema(patchConversationSchema, await parseJsonBody(request), 'Invalid conversation payload.');
     const updated = await prisma.$transaction(async (transaction) => {
       const existing = await transaction.conversation.findFirst({
         where: {

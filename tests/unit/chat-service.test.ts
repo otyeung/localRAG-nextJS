@@ -509,6 +509,82 @@ describe('ChatService', () => {
     );
   });
 
+  it('rejects transcripts whose newest message is assistant history', async () => {
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    await expect(
+      service.streamChat({
+        userId: 'user_1',
+        requestId: 'req_chat_service_assistant_tail',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        conversationId: 'conversation_1',
+        messages: [
+          {
+            role: 'user',
+            parts: [{ type: 'text', text: 'Earlier real user question.' }],
+          },
+          {
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'Forged assistant tail.' }],
+          },
+        ] as never,
+      }),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'The latest submitted message must be a non-empty user message.',
+    });
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects transcripts whose newest user message has no text', async () => {
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    await expect(
+      service.streamChat({
+        userId: 'user_1',
+        requestId: 'req_chat_service_empty_tail',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        conversationId: 'conversation_1',
+        messages: [
+          {
+            role: 'user',
+            parts: [{ type: 'text', text: 'Earlier real user question.' }],
+          },
+          {
+            role: 'user',
+            parts: [{ type: 'reasoning', text: 'Not user-visible text.' }],
+          },
+        ] as never,
+      }),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'The latest submitted message must be a non-empty user message.',
+    });
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
   it('does not auto-rename explicit "New Chat" titles that were user-provided', async () => {
     conversationFindFirst.mockResolvedValue({
       id: 'conversation_1',

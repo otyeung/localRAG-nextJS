@@ -6,7 +6,7 @@ import { AUTO_TITLE_PLACEHOLDER, setConversationTitleSource } from '@/lib/conver
 import { prisma } from '@/lib/db/prisma';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
-import { validateWithSchema } from '@/lib/http/route-validation';
+import { parseJsonBody, validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
@@ -170,7 +170,11 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    const body = validateWithSchema(createConversationBodySchema, await request.json(), 'Invalid conversation payload.');
+    const body = validateWithSchema(
+      createConversationBodySchema,
+      await parseJsonBody(request),
+      'Invalid conversation payload.',
+    );
     const conversation = await prisma.$transaction(async (transaction) => {
       const conversation = await transaction.conversation.create({
         data: {
