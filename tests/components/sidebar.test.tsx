@@ -6,8 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '@/components/sidebar/sidebar';
 
 describe('Sidebar', () => {
-  it('renders stable navigation labels and filters conversations', () => {
+  it('renders stable navigation labels, filters conversations, and requests more results', () => {
     const onConversationSelect = vi.fn();
+    const onLoadMore = vi.fn();
 
     render(
       createElement(Sidebar, {
@@ -41,6 +42,10 @@ describe('Sidebar', () => {
         onConversationRename: vi.fn(),
         onConversationDelete: vi.fn(),
         healthLabel: 'Pending Task 9',
+        totalConversations: 45,
+        hasMoreConversations: true,
+        onLoadMoreConversations: onLoadMore,
+        isLoadingMoreConversations: false,
       }),
     );
 
@@ -55,5 +60,10 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('Vendor Security Questionnaire')).toBeInTheDocument();
     expect(screen.queryByText('Quarterly Report Review')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more conversations' }));
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('1 of 45')).toBeInTheDocument();
   });
 });

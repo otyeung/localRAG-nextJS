@@ -176,4 +176,139 @@ describe('useDocuments', () => {
       status: 'RUNNING',
     });
   });
+
+  it('loads additional document pages and resets to page one when search changes', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (input === '/api/documents?page=1&pageSize=40&sort=updatedAt&order=desc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'document_1',
+                  uploadId: 'upload_1',
+                  status: 'READY',
+                  title: 'Quarterly Report',
+                  originalFilename: 'quarterly-report.pdf',
+                  mimeType: 'application/pdf',
+                  fileSizeBytes: 1024,
+                  chunkCount: 12,
+                  createdAt: '2026-01-01T00:00:00.000Z',
+                  updatedAt: '2026-01-02T00:00:00.000Z',
+                  deletedAt: null,
+                },
+              ],
+              total: 2,
+              page: 1,
+              pageSize: 40,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/documents?page=2&pageSize=40&sort=updatedAt&order=desc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'document_2',
+                  uploadId: 'upload_2',
+                  status: 'FAILED',
+                  title: 'Vendor Checklist',
+                  originalFilename: 'vendor-checklist.pdf',
+                  mimeType: 'application/pdf',
+                  fileSizeBytes: 2048,
+                  chunkCount: 4,
+                  createdAt: '2026-01-01T00:00:00.000Z',
+                  updatedAt: '2026-01-03T00:00:00.000Z',
+                  deletedAt: null,
+                },
+              ],
+              total: 2,
+              page: 2,
+              pageSize: 40,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/documents?page=1&pageSize=40&sort=updatedAt&order=desc&query=vendor') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [
+                {
+                  id: 'document_vendor',
+                  uploadId: 'upload_3',
+                  status: 'READY',
+                  title: 'Vendor Brief',
+                  originalFilename: 'vendor-brief.pdf',
+                  mimeType: 'application/pdf',
+                  fileSizeBytes: 3072,
+                  chunkCount: 8,
+                  createdAt: '2026-01-01T00:00:00.000Z',
+                  updatedAt: '2026-01-04T00:00:00.000Z',
+                  deletedAt: null,
+                },
+              ],
+              total: 1,
+              page: 1,
+              pageSize: 40,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/workflows') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const { result, rerender } = renderHook(({ search }) => useDocuments({ search, pageSize: 40 }), {
+      initialProps: { search: '' },
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.documents).toHaveLength(1);
+    expect(result.current.hasNextPage).toBe(true);
+
+    await result.current.fetchNextPage();
+    await waitFor(() => expect(result.current.documents).toHaveLength(2));
+
+    rerender({ search: 'vendor' });
+
+    await waitFor(() =>
+      expect(result.current.documents).toEqual([
+        expect.objectContaining({
+          id: 'document_vendor',
+          title: 'Vendor Brief',
+        }),
+      ]),
+    );
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/documents?page=1&pageSize=40&sort=updatedAt&order=desc&query=vendor', undefined);
+    expect(result.current.hasNextPage).toBe(false);
+  });
 });

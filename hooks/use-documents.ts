@@ -1,6 +1,7 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 export type DocumentRecord = {
   id: string;
@@ -69,35 +70,42 @@ export function useDocuments({
   status,
   sort = 'updatedAt',
   order = 'desc',
-  page = 1,
   pageSize = 20,
 }: {
   search?: string;
   status?: 'PENDING' | 'INGESTING' | 'READY' | 'FAILED';
   sort?: 'createdAt' | 'updatedAt' | 'title';
   order?: 'asc' | 'desc';
-  page?: number;
   pageSize?: number;
 } = {}) {
   const queryClient = useQueryClient();
-  const searchParams = new URLSearchParams({
-    page: String(page),
-    pageSize: String(pageSize),
-    sort,
-    order,
-  });
+  const normalizedSearch = search?.trim() ?? '';
 
-  if (search?.trim()) {
-    searchParams.set('query', search.trim());
-  }
+  const documentsQuery = useInfiniteQuery({
+    queryKey: ['documents', { search: normalizedSearch, status: status ?? 'all', sort, order, pageSize }],
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => {
+      const searchParams = new URLSearchParams({
+        page: String(pageParam),
+        pageSize: String(pageSize),
+        sort,
+        order,
+      });
 
-  if (status) {
-    searchParams.set('status', status);
-  }
+      if (normalizedSearch) {
+        searchParams.set('query', normalizedSearch);
+      }
 
-  const documentsQuery = useQuery({
-    queryKey: ['documents', { search: search ?? '', status: status ?? 'all', sort, order, page, pageSize }],
-    queryFn: () => requestJson<DocumentPayload>(`/api/documents?${searchParams.toString()}`),
+      if (status) {
+        searchParams.set('status', status);
+      }
+
+      return requestJson<DocumentPayload>(`/api/documents?${searchParams.toString()}`);
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loadedCount = allPages.reduce((count, currentPage) => count + currentPage.items.length, 0);
+      return loadedCount < lastPage.total ? allPages.length + 1 : undefined;
+    },
   });
 
   const workflowsQuery = useQuery({
@@ -131,19 +139,31 @@ export function useDocuments({
     },
   });
 
-  const workflowsByDocumentId = new Map<string, WorkflowRecord>();
-  for (const workflow of workflowsQuery.data?.items ?? []) {
-    if (!workflow.documentId || workflowsByDocumentId.has(workflow.documentId)) {
-      continue;
+  const documents = useMemo(
+    () => documentsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [documentsQuery.data?.pages],
+  );
+  const totalDocuments = documentsQuery.data?.pages[0]?.total ?? 0;
+  const workflowsByDocumentId = useMemo(() => {
+    const workflowMap = new Map<string, WorkflowRecord>();
+
+    for (const workflow of workflowsQuery.data?.items ?? []) {
+      if (!workflow.documentId || workflowMap.has(workflow.documentId)) {
+        continue;
+      }
+
+      workflowMap.set(workflow.documentId, workflow);
     }
 
-    workflowsByDocumentId.set(workflow.documentId, workflow);
-  }
+    return workflowMap;
+  }, [workflowsQuery.data?.items]);
 
   return {
     ...documentsQuery,
     workflows: workflowsQuery.data?.items ?? [],
-    documents: documentsQuery.data?.items ?? [],
+    documents,
+    totalDocuments,
+    loadedDocuments: documents.length,
     workflowsByDocumentId,
     deleteDocument,
     reindexDocument,

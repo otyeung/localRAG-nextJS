@@ -1,6 +1,7 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 export type ConversationSummary = {
   id: string;
@@ -39,32 +40,44 @@ async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T
 export function useConversations({
   query,
   status,
-  page = 1,
   pageSize = 20,
 }: {
   query?: string;
   status?: 'ACTIVE' | 'ARCHIVED';
-  page?: number;
   pageSize?: number;
 } = {}) {
   const queryClient = useQueryClient();
-  const searchParams = new URLSearchParams({
-    page: String(page),
-    pageSize: String(pageSize),
+  const normalizedQuery = query?.trim() ?? '';
+
+  const conversationsQuery = useInfiniteQuery({
+    queryKey: ['conversations', { query: normalizedQuery, status: status ?? 'all', pageSize }],
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => {
+      const searchParams = new URLSearchParams({
+        page: String(pageParam),
+        pageSize: String(pageSize),
+      });
+
+      if (normalizedQuery) {
+        searchParams.set('query', normalizedQuery);
+      }
+
+      if (status) {
+        searchParams.set('status', status);
+      }
+
+      return requestJson<ConversationsPayload>(`/api/conversations?${searchParams.toString()}`);
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loadedCount = allPages.reduce((count, currentPage) => count + currentPage.items.length, 0);
+      return loadedCount < lastPage.total ? allPages.length + 1 : undefined;
+    },
   });
-
-  if (query?.trim()) {
-    searchParams.set('query', query.trim());
-  }
-
-  if (status) {
-    searchParams.set('status', status);
-  }
-
-  const conversationsQuery = useQuery({
-    queryKey: ['conversations', { query: query ?? '', status: status ?? 'all', page, pageSize }],
-    queryFn: () => requestJson<ConversationsPayload>(`/api/conversations?${searchParams.toString()}`),
-  });
+  const conversations = useMemo(
+    () => conversationsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [conversationsQuery.data?.pages],
+  );
+  const totalConversations = conversationsQuery.data?.pages[0]?.total ?? 0;
 
   const invalidateConversations = async () => {
     await queryClient.invalidateQueries({ queryKey: ['conversations'] });
@@ -104,7 +117,9 @@ export function useConversations({
 
   return {
     ...conversationsQuery,
-    conversations: conversationsQuery.data?.items ?? [],
+    conversations,
+    totalConversations,
+    loadedConversations: conversations.length,
     createConversation,
     renameConversation,
     deleteConversation,

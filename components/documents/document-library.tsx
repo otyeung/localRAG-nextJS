@@ -58,6 +58,10 @@ function canReindexDocument(document: DocumentRecord, workflow: WorkflowRecord |
 
 export function DocumentLibrary({
   documents,
+  totalDocuments = documents.length,
+  hasMoreDocuments = false,
+  onLoadMoreDocuments,
+  isLoadingMoreDocuments = false,
   workflowsByDocumentId,
   uploadHistory,
   search,
@@ -72,6 +76,10 @@ export function DocumentLibrary({
   reindexError,
 }: {
   documents: DocumentRecord[];
+  totalDocuments?: number;
+  hasMoreDocuments?: boolean;
+  onLoadMoreDocuments?: () => void;
+  isLoadingMoreDocuments?: boolean;
   workflowsByDocumentId: Map<string, WorkflowRecord>;
   uploadHistory: UploadHistoryItem[];
   search: string;
@@ -93,6 +101,9 @@ export function DocumentLibrary({
             <h3 className="text-base font-semibold text-[color:var(--text-strong)]">Document library</h3>
             <p className="mt-1 text-sm text-[color:var(--text-muted)]">
               Search indexed files, inspect ingestion workflow state, and queue follow-up actions from one pane.
+            </p>
+            <p className="mt-2 text-xs uppercase tracking-[0.16em] text-[color:var(--text-dim)]">
+              Showing {documents.length} of {totalDocuments} documents
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -136,124 +147,136 @@ export function DocumentLibrary({
 
       <div className="space-y-3">
         {documents.length > 0 ? (
-          documents.map((document) => {
-            const workflow = workflowsByDocumentId.get(document.id);
-            const relatedUploads = uploadHistory.filter((upload) => upload.id === document.uploadId);
-            const canReindex = canReindexDocument(document, workflow);
-            const isReindexing = reindexingDocumentId === document.id;
+          <>
+            {documents.map((document) => {
+              const workflow = workflowsByDocumentId.get(document.id);
+              const relatedUploads = uploadHistory.filter((upload) => upload.id === document.uploadId);
+              const canReindex = canReindexDocument(document, workflow);
+              const isReindexing = reindexingDocumentId === document.id;
 
-            return (
-              <article
-                key={document.id}
-                className="rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-5 shadow-[var(--shadow-panel)]"
-              >
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-3 text-[color:var(--text-muted)]">
-                        <Database className="h-4 w-4" />
-                      </span>
-                      <div>
-                        <h4 className="text-base font-semibold text-[color:var(--text-strong)]">{document.title}</h4>
-                        <p className="text-sm text-[color:var(--text-muted)]">{document.originalFilename}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge label={document.status} tone={statusTone(document.status)} />
-                      <StatusBadge
-                        label={workflow?.status ?? 'Workflow pending'}
-                        tone={workflow ? statusTone(workflow.status) : 'neutral'}
-                      />
-                      <StatusBadge label={sortLabel(sort)} tone="neutral" />
-                    </div>
-
-                    <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <div>
-                        <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Metadata</dt>
-                        <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
-                          {document.mimeType} · {formatBytes(document.fileSizeBytes)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Chunk count</dt>
-                        <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
-                          {Number.isFinite(document.chunkCount) && document.chunkCount >= 0
-                            ? formatChunkCount(document.chunkCount)
-                            : 'Unknown'}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Embedding status</dt>
-                        <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
-                          {document.status === 'READY' ? 'Indexed' : document.status === 'FAILED' ? 'Attention' : 'Processing'}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Workflow status</dt>
-                        <dd className="mt-1 text-sm text-[color:var(--text-strong)]">{workflow?.status ?? 'Waiting for workflow route'}</dd>
-                      </div>
-                    </dl>
-
-                    <div className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
-                      <div className="flex items-center justify-between gap-3">
+              return (
+                <article
+                  key={document.id}
+                  className="rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-5 shadow-[var(--shadow-panel)]"
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-3 text-[color:var(--text-muted)]">
+                          <Database className="h-4 w-4" />
+                        </span>
                         <div>
-                          <p className="text-sm font-medium text-[color:var(--text-strong)]">Upload history</p>
-                          <p className="text-xs text-[color:var(--text-dim)]">
-                            Linked upload ID: {document.uploadId}
-                          </p>
+                          <h4 className="text-base font-semibold text-[color:var(--text-strong)]">{document.title}</h4>
+                          <p className="text-sm text-[color:var(--text-muted)]">{document.originalFilename}</p>
                         </div>
-                        {workflow?.reconciliationRequired ? (
-                          <StatusBadge label="Needs reconciliation" tone="warning" />
-                        ) : null}
                       </div>
-                      <div className="mt-3 space-y-2">
-                        {relatedUploads.length > 0 ? (
-                          relatedUploads.map((upload) => (
-                            <div
-                              key={upload.id}
-                              className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
-                            >
-                              <div>
-                                <p className="text-sm font-medium text-[color:var(--text-strong)]">{upload.originalFilename}</p>
-                                <p className="text-xs text-[color:var(--text-dim)]">{new Date(upload.updatedAt).toLocaleString()}</p>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge label={document.status} tone={statusTone(document.status)} />
+                        <StatusBadge
+                          label={workflow?.status ?? 'Workflow pending'}
+                          tone={workflow ? statusTone(workflow.status) : 'neutral'}
+                        />
+                        <StatusBadge label={sortLabel(sort)} tone="neutral" />
+                      </div>
+
+                      <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <div>
+                          <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Metadata</dt>
+                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
+                            {document.mimeType} · {formatBytes(document.fileSizeBytes)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Chunk count</dt>
+                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
+                            {Number.isFinite(document.chunkCount) && document.chunkCount >= 0
+                              ? formatChunkCount(document.chunkCount)
+                              : 'Unknown'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Embedding status</dt>
+                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
+                            {document.status === 'READY' ? 'Indexed' : document.status === 'FAILED' ? 'Attention' : 'Processing'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Workflow status</dt>
+                          <dd className="mt-1 text-sm text-[color:var(--text-strong)]">{workflow?.status ?? 'Waiting for workflow route'}</dd>
+                        </div>
+                      </dl>
+
+                      <div className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium text-[color:var(--text-strong)]">Upload history</p>
+                            <p className="text-xs text-[color:var(--text-dim)]">
+                              Linked upload ID: {document.uploadId}
+                            </p>
+                          </div>
+                          {workflow?.reconciliationRequired ? (
+                            <StatusBadge label="Needs reconciliation" tone="warning" />
+                          ) : null}
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {relatedUploads.length > 0 ? (
+                            relatedUploads.map((upload) => (
+                              <div
+                                key={upload.id}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
+                              >
+                                <div>
+                                  <p className="text-sm font-medium text-[color:var(--text-strong)]">{upload.originalFilename}</p>
+                                  <p className="text-xs text-[color:var(--text-dim)]">{new Date(upload.updatedAt).toLocaleString()}</p>
+                                </div>
+                                <StatusBadge label={upload.status} tone={statusTone(upload.status)} />
                               </div>
-                              <StatusBadge label={upload.status} tone={statusTone(upload.status)} />
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-sm text-[color:var(--text-muted)]">
-                            Upload history will populate once the public upload feed is available for this document.
-                          </p>
-                        )}
+                            ))
+                          ) : (
+                            <p className="text-sm text-[color:var(--text-muted)]">
+                              Upload history will populate once the public upload feed is available for this document.
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="flex flex-row gap-2 xl:flex-col">
-                    <button
-                      type="button"
-                      aria-label={`Re-index ${document.title}`}
-                      disabled={!canReindex || isReindexing}
-                      className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-4 py-2 text-sm font-medium text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => onReindex(document.id)}
-                    >
-                      <RefreshCw className={['h-4 w-4', isReindexing ? 'animate-spin' : ''].join(' ')} />
-                      {isReindexing ? 'Re-indexing…' : 'Re-index'}
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-2 rounded-full border border-rose-500/30 px-4 py-2 text-sm font-medium text-rose-300 transition hover:border-rose-400/40"
-                      onClick={() => onDelete(document.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </button>
+                    <div className="flex flex-row gap-2 xl:flex-col">
+                      <button
+                        type="button"
+                        aria-label={`Re-index ${document.title}`}
+                        disabled={!canReindex || isReindexing}
+                        className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-4 py-2 text-sm font-medium text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => onReindex(document.id)}
+                      >
+                        <RefreshCw className={['h-4 w-4', isReindexing ? 'animate-spin' : ''].join(' ')} />
+                        {isReindexing ? 'Re-indexing…' : 'Re-index'}
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded-full border border-rose-500/30 px-4 py-2 text-sm font-medium text-rose-300 transition hover:border-rose-400/40"
+                        onClick={() => onDelete(document.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </article>
-            );
-          })
+                </article>
+              );
+            })}
+            {hasMoreDocuments ? (
+              <button
+                type="button"
+                className="w-full rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] px-4 py-3 text-sm font-medium text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] disabled:cursor-wait disabled:opacity-70"
+                onClick={onLoadMoreDocuments}
+                disabled={isLoadingMoreDocuments}
+              >
+                {isLoadingMoreDocuments ? 'Loading more…' : 'Load more documents'}
+              </button>
+            ) : null}
+          </>
         ) : (
           <div className="rounded-[1.75rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-6 text-sm text-[color:var(--text-muted)]">
             No documents match the current knowledge-base filters.

@@ -95,6 +95,8 @@ export function UploadDropzone({
                 if (event.target.files?.length) {
                   onFilesSelected(event.target.files);
                 }
+
+                event.currentTarget.value = '';
               }}
             />
           </label>

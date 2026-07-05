@@ -174,4 +174,49 @@ describe('DocumentLibrary', () => {
     expect(screen.getAllByText('0 chunks').length).toBeGreaterThan(0);
     expect(screen.queryByText('Pending pipeline telemetry')).not.toBeInTheDocument();
   });
+
+  it('shows paging controls and requests additional documents', () => {
+    const onLoadMore = vi.fn();
+
+    render(
+      createElement(DocumentLibrary, {
+        documents: [
+          {
+            id: 'document_ready',
+            uploadId: 'upload_1',
+            status: 'READY',
+            title: 'Quarterly Report',
+            originalFilename: 'quarterly-report.pdf',
+            mimeType: 'application/pdf',
+            fileSizeBytes: 1024,
+            chunkCount: 12,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
+          },
+        ],
+        workflowsByDocumentId: new Map(),
+        uploadHistory: [],
+        search: '',
+        statusFilter: 'ALL',
+        sort: 'updatedAt',
+        onSearchChange: vi.fn(),
+        onStatusFilterChange: vi.fn(),
+        onSortChange: vi.fn(),
+        onDelete: vi.fn(),
+        onReindex: vi.fn(),
+        reindexingDocumentId: null,
+        reindexError: null,
+        totalDocuments: 48,
+        hasMoreDocuments: true,
+        onLoadMoreDocuments: onLoadMore,
+        isLoadingMoreDocuments: false,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more documents' }));
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Showing 1 of 48 documents')).toBeInTheDocument();
+  });
 });

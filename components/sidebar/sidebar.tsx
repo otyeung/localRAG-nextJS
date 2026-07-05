@@ -9,6 +9,10 @@ import type { ConversationSummary } from '@/hooks/use-conversations';
 
 export function Sidebar({
   conversations,
+  totalConversations = conversations.length,
+  hasMoreConversations = false,
+  onLoadMoreConversations,
+  isLoadingMoreConversations = false,
   activeConversationId,
   conversationSearchValue,
   onConversationSearchChange,
@@ -21,6 +25,10 @@ export function Sidebar({
   healthLabel,
 }: {
   conversations: ConversationSummary[];
+  totalConversations?: number;
+  hasMoreConversations?: boolean;
+  onLoadMoreConversations?: () => void;
+  isLoadingMoreConversations?: boolean;
   activeConversationId: string | null;
   conversationSearchValue: string;
   onConversationSearchChange: (value: string) => void;
@@ -119,7 +127,9 @@ export function Sidebar({
       <section className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-[color:var(--text-strong)]">Recent conversations</h3>
-          <span className="text-xs text-[color:var(--text-dim)]">{visibleConversations.length}</span>
+          <span className="text-xs text-[color:var(--text-dim)]">
+            {visibleConversations.length} of {totalConversations}
+          </span>
         </div>
         <ConversationList
           conversations={visibleConversations}
@@ -128,6 +138,16 @@ export function Sidebar({
           onConversationRename={onConversationRename}
           onConversationDelete={onConversationDelete}
         />
+        {hasMoreConversations ? (
+          <button
+            type="button"
+            className="w-full rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] px-4 py-3 text-sm font-medium text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] disabled:cursor-wait disabled:opacity-70"
+            onClick={onLoadMoreConversations}
+            disabled={isLoadingMoreConversations}
+          >
+            {isLoadingMoreConversations ? 'Loading more…' : 'Load more conversations'}
+          </button>
+        ) : null}
       </section>
 
       <div className="space-y-3 border-t border-[color:var(--border-soft)] pt-4">

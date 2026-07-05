@@ -110,6 +110,12 @@ export function AppShell() {
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_420px]">
           <Sidebar
             conversations={conversations.conversations}
+            totalConversations={conversations.totalConversations}
+            hasMoreConversations={Boolean(conversations.hasNextPage)}
+            onLoadMoreConversations={() => {
+              void conversations.fetchNextPage();
+            }}
+            isLoadingMoreConversations={conversations.isFetchingNextPage}
             activeConversationId={activeConversationId}
             conversationSearchValue={conversationSearch}
             onConversationSearchChange={setConversationSearch}
@@ -137,6 +143,12 @@ export function AppShell() {
                 />
                 <DocumentLibrary
                   documents={documents.documents}
+                  totalDocuments={documents.totalDocuments}
+                  hasMoreDocuments={Boolean(documents.hasNextPage)}
+                  onLoadMoreDocuments={() => {
+                    void documents.fetchNextPage();
+                  }}
+                  isLoadingMoreDocuments={documents.isFetchingNextPage}
                   workflowsByDocumentId={documents.workflowsByDocumentId}
                   uploadHistory={uploads.uploadHistory}
                   search={documentSearch}
