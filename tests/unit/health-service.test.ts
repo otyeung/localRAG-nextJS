@@ -58,4 +58,70 @@ describe('HealthService', () => {
     );
     expect(JSON.stringify(health)).not.toContain('postgresql://secret-host/db');
   });
+
+  it('treats missing OpenAI and Qdrant configuration as degraded without throwing', async () => {
+    const service = new HealthService({
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      getUptimeSeconds: () => 12,
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      getN8nStatus: vi.fn().mockResolvedValue({
+        healthy: true,
+        workflowCount: 1,
+      }),
+      checkQdrantCollection: vi.fn().mockResolvedValue(false),
+      isOpenAiConfigured: vi.fn().mockRejectedValue(new Error('missing OPENAI_API_KEY')),
+      getOpenAiModel: vi.fn().mockRejectedValue(new Error('missing OPENAI_MODEL')),
+      getQdrantCollection: vi.fn().mockRejectedValue(new Error('missing QDRANT_COLLECTION')),
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.status).toBe('degraded');
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'qdrant',
+          status: 'degraded',
+          message: 'Qdrant configuration or connectivity is unavailable.',
+        }),
+        expect.objectContaining({
+          name: 'openai',
+          status: 'degraded',
+          message: 'OpenAI configuration is incomplete.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(health)).not.toContain('missing OPENAI_API_KEY');
+    expect(JSON.stringify(health)).not.toContain('missing QDRANT_COLLECTION');
+  });
+
+  it('recovers when qdrant dependency functions throw', async () => {
+    const service = new HealthService({
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      getUptimeSeconds: () => 12,
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      getN8nStatus: vi.fn().mockResolvedValue({
+        healthy: true,
+        workflowCount: 1,
+      }),
+      checkQdrantCollection: vi.fn().mockRejectedValue(new Error('qdrant ping failed')),
+      isOpenAiConfigured: () => true,
+      getOpenAiModel: () => 'gpt-4.1-mini',
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.status).toBe('degraded');
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'qdrant',
+          status: 'degraded',
+          message: 'Qdrant configuration or connectivity is unavailable.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(health)).not.toContain('qdrant ping failed');
+  });
 });

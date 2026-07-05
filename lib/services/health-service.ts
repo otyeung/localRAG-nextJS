@@ -213,9 +213,9 @@ export class HealthService {
 
   private async buildQdrantCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
-    const collection = await this.getQdrantCollection();
 
     try {
+      const collection = await this.getQdrantCollection();
       const available = await this.checkQdrantCollection();
 
       return {
@@ -231,7 +231,7 @@ export class HealthService {
       return {
         name: 'qdrant',
         status: 'degraded',
-        message: `Qdrant collection "${collection}" is unavailable.`,
+        message: 'Qdrant configuration or connectivity is unavailable.',
         checkedAt,
         latencyMs: roundLatency(startedAt),
       };
@@ -240,15 +240,26 @@ export class HealthService {
 
   private async buildOpenAiCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
-    const model = await this.getOpenAiModel();
-    const configured = await this.isOpenAiConfigured();
 
-    return {
-      name: 'openai',
-      status: configured ? 'healthy' : 'degraded',
-      message: configured ? `OpenAI model "${model}" is configured.` : 'OpenAI configuration is incomplete.',
-      checkedAt,
-      latencyMs: roundLatency(startedAt),
-    };
+    try {
+      const model = await this.getOpenAiModel();
+      const configured = await this.isOpenAiConfigured();
+
+      return {
+        name: 'openai',
+        status: configured ? 'healthy' : 'degraded',
+        message: configured ? `OpenAI model "${model}" is configured.` : 'OpenAI configuration is incomplete.',
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    } catch {
+      return {
+        name: 'openai',
+        status: 'degraded',
+        message: 'OpenAI configuration is incomplete.',
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    }
   }
 }
