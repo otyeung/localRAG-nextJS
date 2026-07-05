@@ -37,7 +37,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
       });
     }
 
-    return jsonOk(await workflowService.getWorkflowStatus(user.id, id));
+    return jsonOk(await workflowService.getPublicWorkflowStatus(user.id, id));
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);
   }

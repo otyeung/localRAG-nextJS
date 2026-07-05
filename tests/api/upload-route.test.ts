@@ -51,7 +51,7 @@ describe('upload route', () => {
     });
   });
 
-  it('accepts same-origin multipart uploads and returns typed upload metadata', async () => {
+  it('accepts same-origin multipart uploads and returns sanitized public upload metadata', async () => {
     const formData = new FormData();
     formData.set(
       'file',
@@ -79,9 +79,7 @@ describe('upload route', () => {
         uploadId: 'upload_1',
         documentId: 'document_1',
         workflowExecutionId: 'workflow_1',
-        externalExecutionId: 'exec_123',
         status: 'RUNNING',
-        storagePath: '/uploads/report.pdf',
         reconciliationRequired: false,
       },
     });
@@ -100,6 +98,39 @@ describe('upload route', () => {
       ipAddress: 'unknown',
       userAgent: 'vitest',
     });
+  });
+
+  it('rejects rate-limited uploads before parsing multipart form data', async () => {
+    routeMocks.rateLimit.mockResolvedValue({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const request = new Request('https://app.example.com/api/upload', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_rate_limited',
+      },
+    });
+    const formDataSpy = vi.spyOn(request, 'formData').mockResolvedValue(new FormData());
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests.',
+        requestId: 'req_rate_limited',
+        details: {
+          resetAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    expect(formDataSpy).not.toHaveBeenCalled();
+    expect(routeMocks.createUpload).not.toHaveBeenCalled();
   });
 
   it('rejects missing file payloads', async () => {

@@ -24,7 +24,7 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    return jsonOk(await workflowService.listWorkflows(user.id));
+    return jsonOk(await workflowService.listPublicWorkflows(user.id));
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);
   }

@@ -7,9 +7,23 @@ import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { DocumentService } from '@/lib/services/document-service';
+import { DocumentService, type DocumentDto } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
+function toPublicDocumentDto(document: DocumentDto) {
+  return {
+    id: document.id,
+    uploadId: document.uploadId,
+    status: document.status,
+    title: document.title,
+    originalFilename: document.originalFilename,
+    mimeType: document.mimeType,
+    fileSizeBytes: document.fileSizeBytes,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    deletedAt: document.deletedAt,
+  };
+}
 const documentRouteParamsSchema = z.object({
   id: z.string().trim().min(1, 'Document id is required.'),
 });
@@ -38,7 +52,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
       });
     }
 
-    return jsonOk(await documentService.getDocument(user.id, id));
+    return jsonOk(toPublicDocumentDto(await documentService.getDocument(user.id, id)));
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);
   }
@@ -64,11 +78,13 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
     }
 
     return jsonOk(
-      await documentService.softDeleteDocument(user.id, id, {
-        requestId: requestContext.requestId,
-        ipAddress: requestContext.ipAddress,
-        userAgent: requestContext.userAgent,
-      }),
+      toPublicDocumentDto(
+        await documentService.softDeleteDocument(user.id, id, {
+          requestId: requestContext.requestId,
+          ipAddress: requestContext.ipAddress,
+          userAgent: requestContext.userAgent,
+        }),
+      ),
     );
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);

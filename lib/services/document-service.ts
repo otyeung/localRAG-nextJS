@@ -28,6 +28,19 @@ export type DocumentDto = {
   deletedAt: string | null;
 };
 
+export type PublicDocumentDto = {
+  id: string;
+  uploadId: string;
+  status: keyof typeof DocumentStatus;
+  title: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+};
+
 export type DocumentQuery = {
   search?: string;
   status?: keyof typeof DocumentStatus;
@@ -59,6 +72,21 @@ function toDocumentDto(document: Document): DocumentDto {
     createdAt: document.createdAt.toISOString(),
     updatedAt: document.updatedAt.toISOString(),
     deletedAt: document.deletedAt?.toISOString() ?? null,
+  };
+}
+
+export function toPublicDocumentDto(document: DocumentDto): PublicDocumentDto {
+  return {
+    id: document.id,
+    uploadId: document.uploadId,
+    status: document.status,
+    title: document.title,
+    originalFilename: document.originalFilename,
+    mimeType: document.mimeType,
+    fileSizeBytes: document.fileSizeBytes,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    deletedAt: document.deletedAt,
   };
 }
 

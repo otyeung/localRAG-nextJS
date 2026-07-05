@@ -28,8 +28,27 @@ export type WorkflowExecutionDto = {
   documentId: string | null;
 };
 
+export type PublicWorkflowExecutionDto = {
+  id: string;
+  workflowKey: string;
+  status: keyof typeof WorkflowStatus;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  uploadId: string | null;
+  documentId: string | null;
+  reconciliationRequired: boolean;
+};
+
 export type WorkflowListResult = {
   items: WorkflowExecutionDto[];
+  total: number;
+};
+
+export type PublicWorkflowListResult = {
+  items: PublicWorkflowExecutionDto[];
   total: number;
 };
 
@@ -69,6 +88,22 @@ function toWorkflowDto(workflow: WorkflowExecution): WorkflowExecutionDto {
     metadata: workflow.metadata,
     uploadId: workflow.uploadId,
     documentId: workflow.documentId,
+  };
+}
+
+export function toPublicWorkflowExecutionDto(workflow: WorkflowExecutionDto): PublicWorkflowExecutionDto {
+  return {
+    id: workflow.id,
+    workflowKey: workflow.workflowKey,
+    status: workflow.status,
+    errorMessage: workflow.errorMessage,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+    startedAt: workflow.startedAt,
+    completedAt: workflow.completedAt,
+    uploadId: workflow.uploadId,
+    documentId: workflow.documentId,
+    reconciliationRequired: isReconciliationRequired(workflow.metadata),
   };
 }
 
@@ -113,6 +148,15 @@ export class WorkflowService {
     };
   }
 
+  async listPublicWorkflows(userId: string): Promise<PublicWorkflowListResult> {
+    const result = await this.listWorkflows(userId);
+
+    return {
+      items: result.items.map(toPublicWorkflowExecutionDto),
+      total: result.total,
+    };
+  }
+
   async getWorkflowStatus(userId: string, workflowExecutionId: string): Promise<WorkflowExecutionDto> {
     const workflow = await this.db.workflowExecution.findFirst({
       where: {
@@ -154,6 +198,10 @@ export class WorkflowService {
     }
 
     return toWorkflowDto(workflow);
+  }
+
+  async getPublicWorkflowStatus(userId: string, workflowExecutionId: string): Promise<PublicWorkflowExecutionDto> {
+    return toPublicWorkflowExecutionDto(await this.getWorkflowStatus(userId, workflowExecutionId));
   }
 
   private async syncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<void> {

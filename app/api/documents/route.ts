@@ -7,9 +7,23 @@ import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { DocumentService, type DocumentQuery } from '@/lib/services/document-service';
+import { DocumentService, type DocumentDto, type DocumentQuery } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
+function toPublicDocumentDto(document: DocumentDto) {
+  return {
+    id: document.id,
+    uploadId: document.uploadId,
+    status: document.status,
+    title: document.title,
+    originalFilename: document.originalFilename,
+    mimeType: document.mimeType,
+    fileSizeBytes: document.fileSizeBytes,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    deletedAt: document.deletedAt,
+  };
+}
 const documentQuerySchema = z.object({
   search: z.preprocess(
     (value) => {
@@ -60,7 +74,12 @@ export async function GET(request: Request): Promise<Response> {
       'Invalid document query parameters.',
     );
 
-    return jsonOk(await documentService.listDocuments(user.id, query));
+    const result = await documentService.listDocuments(user.id, query);
+
+    return jsonOk({
+      ...result,
+      items: result.items.map(toPublicDocumentDto),
+    });
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);
   }

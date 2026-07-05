@@ -39,6 +39,14 @@ export type UploadResult = {
   reconciliationRequired: boolean;
 };
 
+export type PublicUploadResult = {
+  uploadId: string;
+  documentId: string;
+  workflowExecutionId: string;
+  status: keyof typeof WorkflowStatus;
+  reconciliationRequired: boolean;
+};
+
 export type UploadHistoryItem = {
   id: string;
   status: keyof typeof UploadStatus;
@@ -93,6 +101,16 @@ function mapWorkflowStatusToDocumentStatus(status: WorkflowStatus): 'READY' | 'F
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unexpected error occurred.';
+}
+
+export function toPublicUploadResult(upload: UploadResult): PublicUploadResult {
+  return {
+    uploadId: upload.uploadId,
+    documentId: upload.documentId,
+    workflowExecutionId: upload.workflowExecutionId,
+    status: upload.status,
+    reconciliationRequired: upload.reconciliationRequired,
+  };
 }
 
 export class UploadService {

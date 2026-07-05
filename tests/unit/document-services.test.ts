@@ -916,4 +916,122 @@ describe('document services', () => {
       data: { status: DocumentStatus.READY },
     });
   });
+
+  it('maps workflow responses to a sanitized public DTO', async () => {
+    const db = {
+      workflowExecution: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'workflow_1',
+            userId: 'user_1',
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.SUCCESS,
+            externalExecutionId: 'exec_123',
+            requestPayload: { prompt: 'secret' },
+            responsePayload: { ok: true },
+            metadata: {
+              workflowId: 'workflow_123',
+              reconciliationRequired: true,
+            },
+            errorMessage: null,
+            startedAt: new Date('2026-01-01T00:00:00.000Z'),
+            completedAt: new Date('2026-01-01T00:01:00.000Z'),
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      upload: {
+        updateMany: vi.fn(),
+      },
+      document: {
+        updateMany: vi.fn(),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    const result = await service.listPublicWorkflows('user_1');
+
+    expect(result).toEqual({
+      items: [
+        {
+          id: 'workflow_1',
+          workflowKey: 'ingestion',
+          status: 'SUCCESS',
+          errorMessage: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          startedAt: '2026-01-01T00:00:00.000Z',
+          completedAt: '2026-01-01T00:01:00.000Z',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          reconciliationRequired: true,
+        },
+      ],
+      total: 1,
+    });
+  });
+
+  it('omits raw workflow payloads and external execution ids from public status responses', async () => {
+    const db = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: { prompt: 'secret' },
+          responsePayload: { ok: true },
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+      },
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    const result = await service.getPublicWorkflowStatus('user_1', 'workflow_1');
+
+    expect(result).toEqual({
+      id: 'workflow_1',
+      workflowKey: 'ingestion',
+      status: 'SUCCESS',
+      errorMessage: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:01:00.000Z',
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      reconciliationRequired: true,
+    });
+  });
 });

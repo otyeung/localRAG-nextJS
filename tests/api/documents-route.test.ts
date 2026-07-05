@@ -50,13 +50,18 @@ describe('documents routes', () => {
       items: [
         {
           id: 'document_1',
+          uploadId: 'upload_1',
           status: 'READY',
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
           fileSizeBytes: 1024,
+          fileHash: 'hash_1',
+          storagePath: '/uploads/quarterly-report.pdf',
+          metadata: { source: 'upload' },
           createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-02T00:00:00.000Z',
+          deletedAt: null,
         },
       ],
       total: 1,
@@ -65,21 +70,30 @@ describe('documents routes', () => {
     });
     routeMocks.getDocument.mockResolvedValue({
       id: 'document_1',
+      uploadId: 'upload_1',
       status: 'READY',
       title: 'Quarterly Report',
       originalFilename: 'quarterly-report.pdf',
       mimeType: 'application/pdf',
       fileSizeBytes: 1024,
+      fileHash: 'hash_1',
+      storagePath: '/uploads/quarterly-report.pdf',
+      metadata: { source: 'upload' },
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-02T00:00:00.000Z',
+      deletedAt: null,
     });
     routeMocks.softDeleteDocument.mockResolvedValue({
       id: 'document_1',
+      uploadId: 'upload_1',
       status: 'DELETED',
       title: 'Quarterly Report',
       originalFilename: 'quarterly-report.pdf',
       mimeType: 'application/pdf',
       fileSizeBytes: 1024,
+      fileHash: 'hash_1',
+      storagePath: '/uploads/quarterly-report.pdf',
+      metadata: { source: 'upload' },
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-03T00:00:00.000Z',
       deletedAt: '2026-01-03T00:00:00.000Z',
@@ -104,6 +118,7 @@ describe('documents routes', () => {
         items: [
           {
             id: 'document_1',
+            uploadId: 'upload_1',
             status: 'READY',
             title: 'Quarterly Report',
             originalFilename: 'quarterly-report.pdf',
@@ -111,6 +126,7 @@ describe('documents routes', () => {
             fileSizeBytes: 1024,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
           },
         ],
         total: 1,
@@ -126,6 +142,22 @@ describe('documents routes', () => {
       page: 1,
       pageSize: 10,
     });
+  });
+
+  it('omits internal document storage fields from public list responses', async () => {
+    const request = new Request('https://app.example.com/api/documents', {
+      headers: {
+        'x-request-id': 'req_documents_public',
+      },
+    });
+
+    const response = await listDocumentsRoute(request);
+    const body = await response.json();
+    const [first] = body.data.items;
+
+    expect(first).not.toHaveProperty('fileHash');
+    expect(first).not.toHaveProperty('storagePath');
+    expect(first).not.toHaveProperty('metadata');
   });
 
   it('returns structured validation errors for invalid list params', async () => {
@@ -176,6 +208,7 @@ describe('documents routes', () => {
     await expect(response.json()).resolves.toEqual({
       data: {
         id: 'document_1',
+        uploadId: 'upload_1',
         status: 'READY',
         title: 'Quarterly Report',
         originalFilename: 'quarterly-report.pdf',
@@ -183,8 +216,26 @@ describe('documents routes', () => {
         fileSizeBytes: 1024,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-02T00:00:00.000Z',
+        deletedAt: null,
       },
     });
+  });
+
+  it('omits internal document storage fields from public detail responses', async () => {
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      headers: {
+        'x-request-id': 'req_document_public',
+      },
+    });
+
+    const response = await getDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+    const body = await response.json();
+
+    expect(body.data).not.toHaveProperty('fileHash');
+    expect(body.data).not.toHaveProperty('storagePath');
+    expect(body.data).not.toHaveProperty('metadata');
   });
 
   it('returns structured validation errors for invalid document ids', async () => {
@@ -234,6 +285,7 @@ describe('documents routes', () => {
     await expect(response.json()).resolves.toEqual({
       data: {
         id: 'document_1',
+        uploadId: 'upload_1',
         status: 'DELETED',
         title: 'Quarterly Report',
         originalFilename: 'quarterly-report.pdf',
@@ -249,5 +301,25 @@ describe('documents routes', () => {
       ipAddress: 'unknown',
       userAgent: 'vitest',
     });
+  });
+
+  it('omits internal document storage fields from delete responses', async () => {
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      method: 'DELETE',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_document_delete_public',
+      },
+    });
+
+    const response = await deleteDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+    const body = await response.json();
+
+    expect(body.data).not.toHaveProperty('fileHash');
+    expect(body.data).not.toHaveProperty('storagePath');
+    expect(body.data).not.toHaveProperty('metadata');
   });
 });
