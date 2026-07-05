@@ -12,6 +12,7 @@ vi.mock('@/lib/logger/logger', () => ({
 
 import { N8nClient } from '@/lib/n8n/client';
 import { N8nError } from '@/lib/n8n/errors';
+import { N8nWorkflowService } from '@/lib/n8n/workflow';
 
 describe('N8nClient', () => {
   it('adds API key auth, request id, and retries transient failures', async () => {
@@ -54,5 +55,42 @@ describe('N8nClient', () => {
 
     await expect(client.post('/webhook/retrieval', { body: { query: 'hello' } })).rejects.toBeInstanceOf(N8nError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches and combines all active workflow pages', async () => {
+    const client = {
+      get: vi
+        .fn()
+        .mockResolvedValueOnce({
+          data: [
+            { id: 'wf_1', name: 'Workflow 1', active: true, tags: [] },
+            { id: 'wf_2', name: 'Workflow 2', active: true, tags: [] },
+          ],
+          nextCursor: 'cursor_2',
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'wf_3', name: 'Workflow 3', active: true, tags: [] }],
+          nextCursor: null,
+        }),
+    };
+
+    const service = new N8nWorkflowService(client as never);
+
+    await expect(service.listActiveWorkflows('req_456')).resolves.toEqual([
+      { id: 'wf_1', name: 'Workflow 1', active: true, tags: [] },
+      { id: 'wf_2', name: 'Workflow 2', active: true, tags: [] },
+      { id: 'wf_3', name: 'Workflow 3', active: true, tags: [] },
+    ]);
+    expect(client.get).toHaveBeenCalledTimes(2);
+    expect(client.get).toHaveBeenNthCalledWith(1, '/api/v1/workflows', {
+      query: { active: 'true', cursor: undefined },
+      requestId: 'req_456',
+      schema: expect.any(Object),
+    });
+    expect(client.get).toHaveBeenNthCalledWith(2, '/api/v1/workflows', {
+      query: { active: 'true', cursor: 'cursor_2' },
+      requestId: 'req_456',
+      schema: expect.any(Object),
+    });
   });
 });

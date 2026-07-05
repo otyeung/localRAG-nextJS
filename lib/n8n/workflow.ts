@@ -34,13 +34,24 @@ export class N8nWorkflowService {
   constructor(private readonly client: N8nClient = createN8nClient()) {}
 
   async listActiveWorkflows(requestId?: string): Promise<N8nWorkflow[]> {
-    return this.client.get('/api/v1/workflows', {
-      query: {
-        active: 'true',
-      },
-      requestId,
-      schema: n8nWorkflowListSchema.transform((result) => result.data),
-    });
+    const workflows: N8nWorkflow[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const page = await this.client.get('/api/v1/workflows', {
+        query: {
+          active: 'true',
+          cursor,
+        },
+        requestId,
+        schema: n8nWorkflowListSchema,
+      });
+
+      workflows.push(...page.data);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    return workflows;
   }
 
   async startWorkflow(input: StartWorkflowInput): Promise<N8nWorkflowStartResult> {
