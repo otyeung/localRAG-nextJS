@@ -76,13 +76,24 @@ export function jsonOk<T>(data: T, init?: ResponseInit): Response {
 }
 
 export function jsonError(error: AppError, requestId: string): Response {
+  if (error.code === 'INTERNAL_ERROR') {
+    return Response.json(
+      {
+        error: {
+          code: error.code,
+          message: 'An unexpected error occurred.',
+          requestId,
+        },
+      },
+      { status: error.status },
+    );
+  }
+
   let details: unknown;
-  if (error.code !== 'INTERNAL_ERROR') {
-    try {
-      details = serializeDetails(error.details);
-    } catch {
-      details = UNSERIALIZABLE_DETAILS;
-    }
+  try {
+    details = serializeDetails(error.details);
+  } catch {
+    details = UNSERIALIZABLE_DETAILS;
   }
 
   return Response.json(

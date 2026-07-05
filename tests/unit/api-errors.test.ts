@@ -67,7 +67,7 @@ describe('json response helpers', () => {
     await expect(response.json()).resolves.toEqual({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Sensitive failure',
+        message: 'An unexpected error occurred.',
         requestId: 'request-2b',
       },
     });
