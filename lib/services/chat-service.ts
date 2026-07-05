@@ -71,6 +71,12 @@ export type StreamChatInput = {
   messages: AppUiMessage[];
 };
 
+function withConversationHeader(error: AppError, conversationId: string): AppError {
+  const headers = new Headers(error.headers);
+  headers.set('x-conversation-id', conversationId);
+  return new AppError(error.code, error.message, error.details, headers);
+}
+
 function deriveConversationTitle(text: string): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
   if (!normalized) {
@@ -421,7 +427,13 @@ export class ChatService {
           },
         },
       });
-      throw error instanceof AppError ? error : new AppError('INTERNAL_ERROR', 'Unable to start chat stream.');
+      if (error instanceof AppError) {
+        throw withConversationHeader(error, conversation.id);
+      }
+
+      throw new AppError('INTERNAL_ERROR', 'Unable to start chat stream.', undefined, {
+        'x-conversation-id': conversation.id,
+      });
     }
   }
 

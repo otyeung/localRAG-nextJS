@@ -25,13 +25,15 @@ export class AppError extends Error {
   readonly code: AppErrorCode;
   readonly status: number;
   readonly details?: unknown;
+  readonly headers?: Headers;
 
-  constructor(code: AppErrorCode, message: string, details?: unknown) {
+  constructor(code: AppErrorCode, message: string, details?: unknown, headers?: HeadersInit) {
     super(message);
     this.name = 'AppError';
     this.code = code;
     this.status = statusByCode[code];
     this.details = details;
+    this.headers = headers ? new Headers(headers) : undefined;
   }
 }
 

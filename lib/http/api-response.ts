@@ -85,7 +85,7 @@ export function jsonError(error: AppError, requestId: string): Response {
           requestId,
         },
       },
-      { status: error.status },
+      { status: error.status, headers: error.headers },
     );
   }
 
@@ -105,7 +105,7 @@ export function jsonError(error: AppError, requestId: string): Response {
           requestId,
         },
       },
-      { status: error.status },
+      { status: error.status, headers: error.headers },
     );
   }
 
@@ -125,6 +125,6 @@ export function jsonError(error: AppError, requestId: string): Response {
         ...(details === undefined ? {} : { details }),
       },
     },
-    { status: error.status },
+    { status: error.status, headers: error.headers },
   );
 }

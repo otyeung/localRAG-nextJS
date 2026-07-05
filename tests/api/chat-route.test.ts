@@ -28,6 +28,7 @@ vi.mock('@/lib/services/chat-service', () => ({
 }));
 
 import { POST } from '@/app/api/chat/route';
+import { AppError } from '@/lib/http/api-errors';
 
 describe('chat route', () => {
   beforeEach(() => {
@@ -315,6 +316,43 @@ describe('chat route', () => {
         code: 'INTERNAL_ERROR',
         message: 'An unexpected error occurred.',
         requestId: 'req_chat_rejected',
+      },
+    });
+  });
+
+  it('preserves the created conversation id on structured startup errors', async () => {
+    routeMocks.streamChat.mockRejectedValue(
+      new AppError('INTERNAL_ERROR', 'Unable to start chat stream.', undefined, {
+        'x-conversation-id': 'conversation_started_1',
+      }),
+    );
+
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_chat_startup_with_conversation',
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'user',
+            parts: [{ type: 'text', text: 'Start the thread, then fail before streaming.' }],
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('x-conversation-id')).toBe('conversation_started_1');
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred.',
+        requestId: 'req_chat_startup_with_conversation',
       },
     });
   });

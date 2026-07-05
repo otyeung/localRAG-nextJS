@@ -19,6 +19,12 @@ type ChatMessage = UIMessage<{
   createdAt?: string;
 }>;
 
+type PendingChatRequest = {
+  startedConversationId: string | null;
+  resolvedConversationId: string | null;
+  finalized: boolean;
+};
+
 const STATUS_COPY = {
   submitted: 'Dispatching prompt',
   streaming: 'Streaming answer',
@@ -42,7 +48,7 @@ export function ChatView({
   const [localConversationId, setLocalConversationId] = useState<string | null>(initialConversationId);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pendingHydrationConversationIdRef = useRef<string | null>(initialConversationId);
-  const pendingResolvedConversationIdRef = useRef<string | null>(null);
+  const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const currentConversationIdRef = useRef<string | null>(initialConversationId);
   const queryClient = useQueryClient();
 
@@ -51,22 +57,45 @@ export function ChatView({
     setLocalConversationId(conversationId);
   }, []);
 
-  const syncConversationCaches = useCallback(
-    async (resolvedConversationId: string | null) => {
-      if (resolvedConversationId && resolvedConversationId !== currentConversationIdRef.current) {
-        adoptConversationId(resolvedConversationId);
-        pendingHydrationConversationIdRef.current = resolvedConversationId;
-        onConversationResolved?.(resolvedConversationId);
+  const shouldAdoptResolvedConversation = useCallback((request: PendingChatRequest, resolvedConversationId: string) => {
+    const activeConversationId = currentConversationIdRef.current;
+
+    if (request.startedConversationId === null) {
+      return activeConversationId === null || activeConversationId === resolvedConversationId;
+    }
+
+    return activeConversationId === request.startedConversationId || activeConversationId === resolvedConversationId;
+  }, []);
+
+  const finalizePendingRequest = useCallback(
+    async (request: PendingChatRequest | null) => {
+      if (!request || request.finalized) {
+        return;
+      }
+
+      request.finalized = true;
+      if (pendingRequestRef.current === request) {
+        pendingRequestRef.current = null;
+      }
+
+      if (
+        request.resolvedConversationId &&
+        shouldAdoptResolvedConversation(request, request.resolvedConversationId) &&
+        request.resolvedConversationId !== currentConversationIdRef.current
+      ) {
+        adoptConversationId(request.resolvedConversationId);
+        pendingHydrationConversationIdRef.current = request.resolvedConversationId;
+        onConversationResolved?.(request.resolvedConversationId);
       }
 
       await queryClient.invalidateQueries({ queryKey: ['conversations'] });
 
-      const targetConversationId = resolvedConversationId ?? currentConversationIdRef.current;
+      const targetConversationId = request.resolvedConversationId ?? request.startedConversationId;
       if (targetConversationId) {
         await queryClient.invalidateQueries({ queryKey: ['messages', targetConversationId] });
       }
     },
-    [adoptConversationId, onConversationResolved, queryClient],
+    [adoptConversationId, onConversationResolved, queryClient, shouldAdoptResolvedConversation],
   );
   const transport = useMemo(
     () =>
@@ -76,16 +105,34 @@ export function ChatView({
           conversationId: localConversationId,
         },
         fetch: async (input, init) => {
-          const response = await fetch(input, init);
-          const resolvedConversationId = response.headers.get('x-conversation-id')?.trim();
+          const request: PendingChatRequest = {
+            startedConversationId: currentConversationIdRef.current,
+            resolvedConversationId: null,
+            finalized: false,
+          };
+          pendingRequestRef.current = request;
 
-          pendingResolvedConversationIdRef.current =
-            resolvedConversationId && resolvedConversationId.length > 0 ? resolvedConversationId : null;
+          try {
+            const response = await fetch(input, init);
+            const resolvedConversationId = response.headers.get('x-conversation-id')?.trim();
 
-          return response;
+            request.resolvedConversationId =
+              resolvedConversationId && resolvedConversationId.length > 0 ? resolvedConversationId : null;
+
+            if (!response.ok) {
+              void finalizePendingRequest(request);
+            }
+
+            return response;
+          } catch (error) {
+            if (pendingRequestRef.current === request) {
+              pendingRequestRef.current = null;
+            }
+            throw error;
+          }
         },
       }),
-    [localConversationId],
+    [finalizePendingRequest, localConversationId],
   );
   const {
     messages,
@@ -99,19 +146,8 @@ export function ChatView({
   } = useChat<ChatMessage>({
     id: localConversationId ?? 'new-chat',
     transport,
-    onFinish: ({ isAbort, isError }) => {
-      const resolvedConversationId = pendingResolvedConversationIdRef.current;
-      pendingResolvedConversationIdRef.current = null;
-
-      if (isAbort || isError) {
-        if (resolvedConversationId) {
-          void syncConversationCaches(resolvedConversationId);
-        }
-
-        return;
-      }
-
-      void syncConversationCaches(resolvedConversationId);
+    onFinish: () => {
+      void finalizePendingRequest(pendingRequestRef.current);
     },
   });
   const conversationMessages = useConversationMessages(localConversationId);

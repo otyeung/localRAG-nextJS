@@ -384,6 +384,66 @@ describe('ChatService', () => {
     });
   });
 
+  it('returns the created conversation id when startup fails after persisting a new thread', async () => {
+    conversationCreate.mockResolvedValue({
+      id: 'conversation_new_failure',
+      userId: 'user_1',
+      title: 'First prompt',
+      status: 'ACTIVE',
+      searchText: 'First prompt',
+      deletedAt: null,
+    });
+    messageCreate.mockResolvedValue({
+      id: 'message_user_failure',
+    });
+    runAgent.mockRejectedValue(new Error('agent boot failed'));
+
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const rejection = service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_startup_failure',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      messages: [
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'First prompt' }],
+        },
+      ] as never,
+    });
+
+    await expect(rejection).rejects.toSatisfy((error: { code: string; headers?: Headers }) => {
+      expect(error.code).toBe('INTERNAL_ERROR');
+      expect(error.headers?.get('x-conversation-id')).toBe('conversation_new_failure');
+      return true;
+    });
+
+    expect(agentRunUpdate).toHaveBeenCalledWith({
+      where: { id: 'agent_run_1' },
+      data: {
+        status: 'FAILED',
+        completedAt: expect.any(Date),
+        metadata: {
+          activeAgentName: 'GeneralAssistantAgent',
+          requestId: 'req_chat_service_startup_failure',
+          errorMessage: 'agent boot failed',
+          userMessageId: 'message_user_failure',
+        },
+      },
+    });
+    expect(streamResponseFactory).not.toHaveBeenCalled();
+  });
+
   it('rebuilds search text from persisted messages instead of stale preloaded conversation text', async () => {
     conversationFindFirst.mockResolvedValue({
       id: 'conversation_1',
