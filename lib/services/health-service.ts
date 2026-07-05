@@ -3,6 +3,7 @@ import 'server-only';
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 import packageMetadata from '@/package.json';
+import { resolveN8nUrl } from '@/lib/n8n/url';
 
 export type HealthCheckName = 'app' | 'database' | 'n8n' | 'qdrant' | 'openai';
 export type HealthCheckStatus = 'healthy' | 'degraded' | 'unhealthy';
@@ -59,11 +60,9 @@ type QdrantHealthConfig = {
   collection: string;
 };
 
-const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const DEFAULT_N8N_TIMEOUT_MS = 30_000;
 const DEFAULT_N8N_RETRY_COUNT = 3;
 const DEFAULT_N8N_RETRY_DELAY_MS = 500;
-const DEFAULT_QDRANT_COLLECTION = 'documents';
 
 function roundLatency(startedAt: number) {
   return Math.max(0, Math.round(performance.now() - startedAt));
@@ -128,18 +127,29 @@ function readN8nHealthConfig(): N8nHealthConfig | null {
   };
 }
 
-function readOpenAiHealthConfig(): OpenAiHealthConfig {
+function readOpenAiHealthConfig(): OpenAiHealthConfig | null {
+  const apiKey = readTrimmedEnv('OPENAI_API_KEY');
+  const model = readTrimmedEnv('OPENAI_MODEL');
+
+  if (!apiKey || !model) {
+    return null;
+  }
+
   return {
-    apiKey: readTrimmedEnv('OPENAI_API_KEY') ?? '',
-    model: readTrimmedEnv('OPENAI_MODEL') ?? DEFAULT_OPENAI_MODEL,
+    apiKey,
+    model,
   };
 }
 
 function readQdrantHealthConfig(): QdrantHealthConfig | null {
   const url = readUrlEnv('QDRANT_URL');
-  const collection = readTrimmedEnv('QDRANT_COLLECTION') ?? DEFAULT_QDRANT_COLLECTION;
+  const collection = readTrimmedEnv('QDRANT_COLLECTION');
 
   if (!url) {
+    return null;
+  }
+
+  if (!collection) {
     return null;
   }
 
@@ -161,7 +171,7 @@ async function requestN8nJson(config: N8nHealthConfig, path: string, query?: Rec
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
-    const url = new URL(path, `${config.baseUrl}/`);
+    const url = resolveN8nUrl(config.baseUrl, path);
 
     for (const [key, value] of Object.entries(query ?? {})) {
       url.searchParams.set(key, value);
@@ -285,17 +295,27 @@ async function defaultCheckQdrantCollection(): Promise<boolean> {
 }
 
 async function defaultIsOpenAiConfigured() {
-  const config = readOpenAiHealthConfig();
-
-  return Boolean(config.apiKey && config.model);
+  return Boolean(readOpenAiHealthConfig());
 }
 
 async function defaultGetOpenAiModel() {
-  return readOpenAiHealthConfig().model;
+  const config = readOpenAiHealthConfig();
+
+  if (!config) {
+    throw new Error('OpenAI configuration is incomplete.');
+  }
+
+  return config.model;
 }
 
 async function defaultGetQdrantCollection() {
-  return readQdrantHealthConfig()?.collection ?? DEFAULT_QDRANT_COLLECTION;
+  const config = readQdrantHealthConfig();
+
+  if (!config) {
+    throw new Error('Qdrant configuration is incomplete.');
+  }
+
+  return config.collection;
 }
 
 function summarizeStatus(checks: SystemHealthCheckDto[]): HealthCheckStatus {
@@ -418,6 +438,9 @@ export class HealthService {
 
     try {
       const collection = await this.getQdrantCollection();
+      if (!collection.trim()) {
+        throw new Error('Qdrant configuration is incomplete.');
+      }
       const available = await this.checkQdrantCollection();
 
       return {
@@ -447,10 +470,20 @@ export class HealthService {
       const model = await this.getOpenAiModel();
       const configured = await this.isOpenAiConfigured();
 
+      if (!model.trim() || !configured) {
+        return {
+          name: 'openai',
+          status: 'degraded',
+          message: 'OpenAI configuration is incomplete.',
+          checkedAt,
+          latencyMs: roundLatency(startedAt),
+        };
+      }
+
       return {
         name: 'openai',
-        status: configured ? 'healthy' : 'degraded',
-        message: configured ? `OpenAI model "${model}" is configured.` : 'OpenAI configuration is incomplete.',
+        status: 'healthy',
+        message: `OpenAI model "${model}" is configured.`,
         checkedAt,
         latencyMs: roundLatency(startedAt),
       };

@@ -6,6 +6,7 @@ import { env } from '@/lib/config/env';
 import { logger } from '@/lib/logger/logger';
 import { createN8nHeaders } from '@/lib/n8n/auth';
 import { N8nError, toN8nError } from '@/lib/n8n/errors';
+import { resolveN8nUrl } from '@/lib/n8n/url';
 
 const transientStatusCodes = new Set([408, 429]);
 
@@ -154,7 +155,7 @@ export class N8nClient {
   }
 
   private async performRequest<T>(input: N8nRequest<T>): Promise<T> {
-    const url = new URL(input.path, `${this.options.baseUrl}/`);
+    const url = resolveN8nUrl(this.options.baseUrl, input.path);
 
     for (const [key, value] of Object.entries(input.query ?? {})) {
       if (value !== undefined) {

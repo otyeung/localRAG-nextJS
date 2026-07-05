@@ -46,6 +46,27 @@ describe('N8nClient', () => {
     expect(fetchMock.mock.calls[0][1].headers['x-request-id']).toBe('req_123');
   });
 
+  it('preserves base path prefixes when resolving request urls', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n.local/n8n',
+      apiKey: 'secret',
+      timeoutMs: 1000,
+      retryCount: 0,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.get('/healthz')).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://n8n.local/n8n/healthz',
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    );
+  });
+
   it('does not retry successful responses with invalid json bodies', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response('{', {
