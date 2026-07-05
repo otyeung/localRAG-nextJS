@@ -1,4 +1,6 @@
 const timeoutMs = 15_000;
+const readyTimeoutMs = 120_000;
+const readyIntervalMs = 1_000;
 
 function readRequiredEnv(name) {
   const value = process.env[name]?.trim();
@@ -36,6 +38,34 @@ async function requestJson(url, init) {
   return { response, json };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForReady(baseUrl) {
+  const readyUrl = `${baseUrl}/readyz`;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < readyTimeoutMs) {
+    try {
+      const response = await fetch(readyUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      if (response.ok) {
+        return;
+      }
+    } catch (error) {
+      void error;
+    }
+
+    await sleep(readyIntervalMs);
+  }
+
+  throw new Error(`Timed out waiting for Qdrant to become ready at ${readyUrl}`);
+}
+
 function readExistingVectorShape(payload) {
   const vectors = payload?.result?.config?.params?.vectors;
 
@@ -59,6 +89,8 @@ async function ensureCollection() {
   const vectorSize = parseVectorSize(readRequiredEnv('QDRANT_VECTOR_SIZE'));
   const distance = readRequiredEnv('QDRANT_DISTANCE');
   const collectionUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}`;
+
+  await waitForReady(baseUrl);
 
   const { response, json } = await requestJson(collectionUrl, { method: 'GET' });
 

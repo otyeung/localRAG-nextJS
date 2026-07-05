@@ -26,12 +26,6 @@ services:
       - '6333'
     volumes:
       - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ['CMD', 'curl', '--fail', '--silent', 'http://127.0.0.1:6333/readyz']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     networks:
       - app-network
 
@@ -40,7 +34,7 @@ services:
     restart: 'no'
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
     working_dir: /workspace
     environment:
       QDRANT_URL: http://qdrant:6333

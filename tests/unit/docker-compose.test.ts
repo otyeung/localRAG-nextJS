@@ -53,10 +53,18 @@ describe('docker compose', () => {
   it('bootstraps the Qdrant collection before application services start', () => {
     expect(compose).toContain('qdrant-init:');
     expect(compose).toContain('service_completed_successfully');
+    expect(compose).toContain('condition: service_started');
     expect(compose).toContain('QDRANT_VECTOR_SIZE');
     expect(compose).toContain('QDRANT_DISTANCE');
     expect(compose).toContain('OPENAI_EMBEDDING_MODEL');
     expect(compose).toContain('N8N_WEBHOOK_SECRET');
+  });
+
+  it('does not rely on a curl healthcheck inside the Qdrant image', () => {
+    const qdrantBlock = compose.match(/\n  qdrant:\n([\s\S]*?)\n  qdrant-init:/)?.[1] ?? '';
+
+    expect(qdrantBlock).not.toContain('healthcheck:');
+    expect(qdrantBlock).not.toContain("curl', '--fail', '--silent', 'http://127.0.0.1:6333/readyz");
   });
 
   it('requires an operator-created n8n api key instead of shipping a fake compose default', () => {
@@ -74,6 +82,14 @@ describe('docker compose', () => {
   it('marks imported n8n workflows as active for production webhook registration', () => {
     expect(ingestionWorkflow.active).toBe(true);
     expect(retrievalWorkflow.active).toBe(true);
+  });
+
+  it('waits for Qdrant readiness inside the init container before creating the collection', () => {
+    const ensureQdrant = readFileSync('scripts/ensure-qdrant-collection.mjs', 'utf8');
+
+    expect(ensureQdrant).toContain('waitForReady');
+    expect(ensureQdrant).toContain("readyUrl = `${baseUrl}/readyz`");
+    expect(ensureQdrant).toContain('Timed out waiting for Qdrant to become ready');
   });
 
   it('preserves ingestion metadata after embedding before building Qdrant points', () => {
