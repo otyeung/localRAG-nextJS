@@ -7,7 +7,6 @@ import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
-import { ConversationRepository } from '@/lib/repositories/conversation-repository';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
@@ -171,7 +170,31 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const body = validateWithSchema(createConversationBodySchema, await request.json(), 'Invalid conversation payload.');
-    const conversation = await new ConversationRepository(prisma).createForUser(user.id, body.title);
+    const conversation = await prisma.$transaction(async (transaction) => {
+      const conversation = await transaction.conversation.create({
+        data: {
+          userId: user.id,
+          ...(body.title ? { title: body.title } : {}),
+        },
+      });
+      await transaction.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'conversation.created',
+          entityType: 'conversation',
+          entityId: conversation.id,
+          requestId: requestContext.requestId,
+          ipAddress: requestContext.ipAddress,
+          userAgent: requestContext.userAgent,
+          metadata: {
+            source: 'conversations-api',
+            hasCustomTitle: Boolean(body.title),
+          },
+        },
+      });
+
+      return conversation;
+    });
 
     return jsonOk(
       toConversationSummary({

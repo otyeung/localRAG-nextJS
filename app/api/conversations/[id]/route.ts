@@ -64,6 +64,39 @@ function toConversationDetail(conversation: {
   };
 }
 
+function buildConversationUpdateAudit(input: {
+  previousStatus: ConversationStatus;
+  nextStatus: ConversationStatus;
+  titleUpdated: boolean;
+}) {
+  const changedFields = [
+    ...(input.titleUpdated ? ['title'] : []),
+    ...(input.previousStatus !== input.nextStatus ? ['status'] : []),
+  ];
+
+  if (input.titleUpdated && input.previousStatus === input.nextStatus) {
+    return {
+      action: 'conversation.renamed',
+      metadata: {
+        source: 'conversations-api',
+        titleUpdated: true,
+        changedFields,
+      },
+    };
+  }
+
+  return {
+    action: input.previousStatus !== input.nextStatus ? 'conversation.updated' : 'conversation.renamed',
+    metadata: {
+      source: 'conversations-api',
+      titleUpdated: input.titleUpdated,
+      changedFields,
+      previousStatus: input.previousStatus,
+      nextStatus: input.nextStatus,
+    },
+  };
+}
+
 async function getOwnedConversation(userId: string, id: string) {
   const conversation = await prisma.conversation.findFirst({
     where: {
@@ -154,35 +187,89 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       });
     }
 
-    await getOwnedConversation(user.id, id);
     const body = validateWithSchema(patchConversationSchema, await request.json(), 'Invalid conversation payload.');
-    const updated = await prisma.conversation.update({
-      where: { id },
-      data: {
-        ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.status !== undefined ? { status: ConversationStatus[body.status] } : {}),
-      },
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-        deletedAt: true,
-        messages: {
-          select: { content: true },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+    const updated = await prisma.$transaction(async (transaction) => {
+      const existing = await transaction.conversation.findFirst({
+        where: {
+          id,
+          userId: user.id,
+          deletedAt: null,
         },
-        agentRuns: {
-          select: { metadata: true },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          deletedAt: true,
+          messages: {
+            select: { content: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          agentRuns: {
+            select: { metadata: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          _count: {
+            select: { messages: true },
+          },
         },
-        _count: {
-          select: { messages: true },
+      });
+
+      if (!existing) {
+        throw new AppError('NOT_FOUND', 'Conversation not found.');
+      }
+
+      const nextStatus = body.status !== undefined ? ConversationStatus[body.status] : existing.status;
+      const updated = await transaction.conversation.update({
+        where: { id },
+        data: {
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.status !== undefined ? { status: nextStatus } : {}),
         },
-      },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          deletedAt: true,
+          messages: {
+            select: { content: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          agentRuns: {
+            select: { metadata: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          _count: {
+            select: { messages: true },
+          },
+        },
+      });
+      const audit = buildConversationUpdateAudit({
+        previousStatus: existing.status,
+        nextStatus: updated.status,
+        titleUpdated: body.title !== undefined,
+      });
+      await transaction.auditLog.create({
+        data: {
+          userId: user.id,
+          action: audit.action,
+          entityType: 'conversation',
+          entityId: id,
+          requestId: requestContext.requestId,
+          ipAddress: requestContext.ipAddress,
+          userAgent: requestContext.userAgent,
+          metadata: audit.metadata,
+        },
+      });
+
+      return updated;
     });
 
     return jsonOk(toConversationDetail(updated));
@@ -215,34 +302,67 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
       });
     }
 
-    await getOwnedConversation(user.id, id);
-    const deleted = await prisma.conversation.update({
-      where: { id },
-      data: {
-        status: ConversationStatus.DELETED,
-        deletedAt: new Date(),
-      },
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-        deletedAt: true,
-        messages: {
-          select: { content: true },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+    const deleted = await prisma.$transaction(async (transaction) => {
+      const existing = await transaction.conversation.findFirst({
+        where: {
+          id,
+          userId: user.id,
+          deletedAt: null,
         },
-        agentRuns: {
-          select: { metadata: true },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+        select: {
+          id: true,
         },
-        _count: {
-          select: { messages: true },
+      });
+
+      if (!existing) {
+        throw new AppError('NOT_FOUND', 'Conversation not found.');
+      }
+
+      const deleted = await transaction.conversation.update({
+        where: { id },
+        data: {
+          status: ConversationStatus.DELETED,
+          deletedAt: new Date(),
         },
-      },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          deletedAt: true,
+          messages: {
+            select: { content: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          agentRuns: {
+            select: { metadata: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          _count: {
+            select: { messages: true },
+          },
+        },
+      });
+      await transaction.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'conversation.deleted',
+          entityType: 'conversation',
+          entityId: id,
+          requestId: requestContext.requestId,
+          ipAddress: requestContext.ipAddress,
+          userAgent: requestContext.userAgent,
+          metadata: {
+            source: 'conversations-api',
+            deleted: true,
+          },
+        },
+      });
+
+      return deleted;
     });
 
     return jsonOk(toConversationDetail(deleted));

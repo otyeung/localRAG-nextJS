@@ -1,10 +1,10 @@
-import type { UIMessage } from 'ai';
 import { z } from 'zod';
 
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
+import { appUiMessageSchema } from '@/lib/openai/ui-messages';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
@@ -15,7 +15,7 @@ const chatService = new ChatService();
 const chatRequestSchema = z.object({
   id: z.string().optional(),
   conversationId: z.string().optional(),
-  messages: z.array(z.custom<UIMessage>()),
+  messages: z.array(appUiMessageSchema),
   activeAgentName: z.string().optional(),
 });
 

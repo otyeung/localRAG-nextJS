@@ -1,9 +1,8 @@
 import 'server-only';
 
-import { AgentRunStatus, ConversationStatus, MessageRole } from '@prisma/client';
+import { AgentRunStatus, ConversationStatus, MessageRole, type Prisma } from '@prisma/client';
 import { run, type Agent, type AgentInputItem, type StreamedRunResult } from '@openai/agents';
 import { createAiSdkUiMessageStreamResponse } from '@openai/agents-extensions/ai-sdk-ui';
-import type { UIMessage } from 'ai';
 
 import { agentRegistry, defaultAgentName } from '@/agents/registry';
 import type { AgentToolRuntimeContext } from '@/agents/tools/shared';
@@ -11,14 +10,16 @@ import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { logger } from '@/lib/logger/logger';
-import { N8nRetrievalService } from '@/lib/n8n/retrieval';
 import { toAgentInput } from '@/lib/openai/message-converters';
-import { ConversationRepository } from '@/lib/repositories/conversation-repository';
+import type { AppUiMessage } from '@/lib/openai/ui-messages';
+import { extractMessageText } from '@/lib/openai/ui-messages';
 import { DocumentService } from '@/lib/services/document-service';
+import { N8nRetrievalService } from '@/lib/n8n/retrieval';
 import { SettingsService } from '@/lib/services/settings-service';
 import { WorkflowService } from '@/lib/services/workflow-service';
 
-type ChatDb = Pick<typeof prisma, '$transaction' | 'conversation' | 'message' | 'agentRun' | 'toolCall'>;
+type ChatDb = Pick<typeof prisma, '$transaction' | 'conversation' | 'message' | 'agentRun' | 'toolCall' | 'auditLog'>;
+type ChatTransactionDb = Prisma.TransactionClient;
 type ChatAgent = Agent<AgentToolRuntimeContext, any>;
 
 type ChatStreamRunner = (
@@ -39,17 +40,8 @@ export type StreamChatInput = {
   userAgent: string;
   conversationId?: string;
   activeAgentName?: string;
-  messages: UIMessage[];
+  messages: AppUiMessage[];
 };
-
-function collectMessageText(message: UIMessage): string {
-  return message.parts
-    .filter((part): part is Extract<(typeof message.parts)[number], { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
 
 function deriveConversationTitle(text: string): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
@@ -70,12 +62,16 @@ function mergeSearchText(current: string | null | undefined, values: string[]): 
   return merged.slice(0, 10_000);
 }
 
-function getLatestUserMessage(messages: UIMessage[]): UIMessage | undefined {
+function getLatestUserMessage(messages: AppUiMessage[]): AppUiMessage | undefined {
   return [...messages].reverse().find((message) => message.role === 'user');
 }
 
 function getAssistantText(stream: StreamedRunResult<AgentToolRuntimeContext, ChatAgent>): string {
   return typeof stream.finalOutput === 'string' ? stream.finalOutput.trim() : '';
+}
+
+function toAuditMetadata(value: Prisma.InputJsonValue): Prisma.InputJsonValue {
+  return value;
 }
 
 export class ChatService {
@@ -114,46 +110,95 @@ export class ChatService {
     }
 
     const latestUserMessage = getLatestUserMessage(input.messages);
-    const latestUserText = latestUserMessage ? collectMessageText(latestUserMessage) : '';
+    const latestUserText = latestUserMessage ? extractMessageText(latestUserMessage).trim() : '';
     if (!latestUserText) {
       throw new AppError('BAD_REQUEST', 'A non-empty user message is required.');
     }
 
-    const conversation = await this.ensureConversation(input.userId, input.conversationId, latestUserText);
     const selectedAgent = await this.resolveAgent(input.userId, input.activeAgentName);
-    const nextSearchText = mergeSearchText(conversation.searchText, [latestUserText]);
-
-    const userMessage = await this.db.message.create({
-      data: {
-        conversationId: conversation.id,
-        role: MessageRole.USER,
-        content: latestUserText,
-        metadata: {
-          clientMessageId: latestUserMessage?.id,
+    const { conversation, userMessage, agentRun, nextSearchText } = await this.db.$transaction(
+      async (transaction: ChatTransactionDb) => {
+        const conversation = await this.ensureConversation(transaction, {
+          userId: input.userId,
+          conversationId: input.conversationId,
+          latestUserText,
           requestId: input.requestId,
-        },
-      },
-    });
-    await this.db.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        searchText: nextSearchText,
-      },
-    });
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+        });
+        const nextSearchText = mergeSearchText(conversation.searchText, [latestUserText]);
 
-    const agentRun = await this.db.agentRun.create({
-      data: {
-        conversationId: conversation.id,
-        status: AgentRunStatus.RUNNING,
-        model: typeof selectedAgent.model === 'string' ? selectedAgent.model : env.openai.model,
-        provider: 'openai',
-        metadata: {
-          activeAgentName: selectedAgent.name,
-          requestId: input.requestId,
-          userMessageId: userMessage.id,
-        },
+        const userMessage = await transaction.message.create({
+          data: {
+            conversationId: conversation.id,
+            role: MessageRole.USER,
+            content: latestUserText,
+            metadata: {
+              clientMessageId: latestUserMessage?.id,
+              requestId: input.requestId,
+            },
+          },
+        });
+        await transaction.conversation.update({
+          where: { id: conversation.id },
+          data: {
+            searchText: nextSearchText,
+          },
+        });
+        await transaction.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'message.created',
+            entityType: 'message',
+            entityId: userMessage.id,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: toAuditMetadata({
+              source: 'chat-api',
+              conversationId: conversation.id,
+              role: MessageRole.USER,
+              clientMessageId: latestUserMessage?.id ?? null,
+            }),
+          },
+        });
+
+        const agentRun = await transaction.agentRun.create({
+          data: {
+            conversationId: conversation.id,
+            status: AgentRunStatus.RUNNING,
+            model: typeof selectedAgent.model === 'string' ? selectedAgent.model : env.openai.model,
+            provider: 'openai',
+            metadata: {
+              activeAgentName: selectedAgent.name,
+              requestId: input.requestId,
+              userMessageId: userMessage.id,
+            },
+          },
+        });
+        await transaction.auditLog.create({
+          data: {
+            userId: input.userId,
+            action: 'agent_run.created',
+            entityType: 'agent_run',
+            entityId: agentRun.id,
+            requestId: input.requestId,
+            ipAddress: input.ipAddress,
+            userAgent: input.userAgent,
+            metadata: toAuditMetadata({
+              source: 'chat-api',
+              conversationId: conversation.id,
+              activeAgentName: selectedAgent.name,
+              model: typeof selectedAgent.model === 'string' ? selectedAgent.model : env.openai.model,
+              provider: 'openai',
+              userMessageId: userMessage.id,
+            }),
+          },
+        });
+
+        return { conversation, userMessage, agentRun, nextSearchText };
       },
-    });
+    );
 
     try {
       const stream = await this.runAgent(selectedAgent, agentInput, {
@@ -252,21 +297,50 @@ export class ChatService {
     }
   }
 
-  private async ensureConversation(userId: string, conversationId: string | undefined, latestUserText: string) {
-    if (!conversationId) {
-      const created = await new ConversationRepository(this.db as never).createForUser(userId, deriveConversationTitle(latestUserText));
-      return this.db.conversation.update({
-        where: { id: created.id },
+  private async ensureConversation(
+    transaction: ChatTransactionDb,
+    input: {
+      userId: string;
+      conversationId?: string;
+      latestUserText: string;
+      requestId: string;
+      ipAddress: string;
+      userAgent: string;
+    },
+  ) {
+    const derivedTitle = deriveConversationTitle(input.latestUserText);
+
+    if (!input.conversationId) {
+      const conversation = await transaction.conversation.create({
         data: {
-          searchText: latestUserText,
+          userId: input.userId,
+          title: derivedTitle,
+          searchText: input.latestUserText,
         },
       });
+      await transaction.auditLog.create({
+        data: {
+          userId: input.userId,
+          action: 'conversation.created',
+          entityType: 'conversation',
+          entityId: conversation.id,
+          requestId: input.requestId,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+          metadata: toAuditMetadata({
+            source: 'chat-api',
+            creationMode: 'implicit',
+          }),
+        },
+      });
+
+      return conversation;
     }
 
-    const conversation = await this.db.conversation.findFirst({
+    const conversation = await transaction.conversation.findFirst({
       where: {
-        id: conversationId,
-        userId,
+        id: input.conversationId,
+        userId: input.userId,
         deletedAt: null,
       },
     });
@@ -280,12 +354,29 @@ export class ChatService {
     }
 
     if (conversation.title === 'New Chat') {
-      return this.db.conversation.update({
+      const updatedConversation = await transaction.conversation.update({
         where: { id: conversation.id },
         data: {
-          title: deriveConversationTitle(latestUserText),
+          title: derivedTitle,
         },
       });
+      await transaction.auditLog.create({
+        data: {
+          userId: input.userId,
+          action: 'conversation.renamed',
+          entityType: 'conversation',
+          entityId: conversation.id,
+          requestId: input.requestId,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+          metadata: toAuditMetadata({
+            source: 'chat-api',
+            titleDerived: true,
+          }),
+        },
+      });
+
+      return updatedConversation;
     }
 
     return conversation;

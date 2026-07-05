@@ -101,6 +101,43 @@ describe('chat route', () => {
     });
   });
 
+  it('accepts legacy content-only messages', async () => {
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_chat_legacy',
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'user',
+            parts: [],
+            content: 'Use the legacy content field.',
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.streamChat).toHaveBeenCalledWith({
+      userId: 'user_1',
+      requestId: 'req_chat_legacy',
+      ipAddress: 'unknown',
+      userAgent: 'unknown',
+      messages: [
+        {
+          role: 'user',
+          parts: [],
+          content: 'Use the legacy content field.',
+        },
+      ],
+    });
+  });
+
   it('returns structured validation errors for invalid request bodies', async () => {
     const request = new Request('https://app.example.com/api/chat', {
       method: 'POST',
@@ -122,6 +159,43 @@ describe('chat route', () => {
         code: 'VALIDATION_ERROR',
         message: 'Invalid chat request payload.',
         requestId: 'req_chat_invalid',
+        details: {
+          formErrors: [],
+          fieldErrors: {
+            messages: expect.any(Array),
+          },
+        },
+      },
+    });
+    expect(routeMocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed messages with structured validation errors', async () => {
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_chat_invalid_message',
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [{ type: 'text', text: '   ' }],
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid chat request payload.',
+        requestId: 'req_chat_invalid_message',
         details: {
           formErrors: [],
           fieldErrors: {
