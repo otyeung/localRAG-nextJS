@@ -1399,7 +1399,21 @@ describe('document services', () => {
   });
 
   it('reconciles resource statuses for accepted workflows that already completed remotely', async () => {
+    const reconciliationTx = {
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const db = {
+      $transaction: vi.fn().mockImplementation(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+        callback(reconciliationTx),
+      ),
       workflowExecution: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'workflow_1',
@@ -1424,10 +1438,10 @@ describe('document services', () => {
         update: vi.fn(),
       },
       upload: {
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        updateMany: vi.fn(),
       },
       document: {
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        updateMany: vi.fn(),
       },
     };
     const executionService = {
@@ -1446,13 +1460,104 @@ describe('document services', () => {
       status: 'SUCCESS',
       externalExecutionId: 'exec_123',
     });
-    expect(db.upload.updateMany).toHaveBeenCalledWith({
-      where: { id: 'upload_1', userId: 'user_1' },
+    expect(reconciliationTx.upload.updateMany).toHaveBeenCalledWith({
+      where: { id: 'upload_1', userId: 'user_1', status: { not: UploadStatus.COMPLETED } },
       data: { status: UploadStatus.COMPLETED },
     });
-    expect(db.document.updateMany).toHaveBeenCalledWith({
-      where: { id: 'document_1', userId: 'user_1' },
+    expect(reconciliationTx.document.updateMany).toHaveBeenCalledWith({
+      where: { id: 'document_1', userId: 'user_1', status: { notIn: [DocumentStatus.READY, DocumentStatus.DELETED] } },
       data: { status: DocumentStatus.READY },
+    });
+    expect(reconciliationTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'workflow.reconciled',
+        entityType: 'workflow_execution',
+        entityId: 'workflow_1',
+        metadata: {
+          workflowKey: 'ingestion',
+          workflowStatus: WorkflowStatus.SUCCESS,
+          uploadId: 'upload_1',
+          uploadStatus: UploadStatus.COMPLETED,
+          uploadUpdated: true,
+          documentId: 'document_1',
+          documentStatus: DocumentStatus.READY,
+          documentUpdated: true,
+          reconciliationRequired: true,
+        },
+      },
+    });
+  });
+
+  it('does not resurrect deleted documents during workflow reconciliation', async () => {
+    const reconciliationTx = {
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+        callback(reconciliationTx),
+      ),
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: { ok: true },
+          metadata: {
+            reconciliationRequired: true,
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+      },
+      upload: {
+        updateMany: vi.fn(),
+      },
+      document: {
+        updateMany: vi.fn(),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    await service.getWorkflowStatus('user_1', 'workflow_1');
+
+    expect(reconciliationTx.document.updateMany).toHaveBeenCalledWith({
+      where: { id: 'document_1', userId: 'user_1', status: { notIn: [DocumentStatus.READY, DocumentStatus.DELETED] } },
+      data: { status: DocumentStatus.READY },
+    });
+    expect(reconciliationTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'workflow.reconciled',
+        entityType: 'workflow_execution',
+        entityId: 'workflow_1',
+        metadata: expect.objectContaining({
+          documentId: 'document_1',
+          documentStatus: DocumentStatus.READY,
+          documentUpdated: false,
+        }),
+      },
     });
   });
 
@@ -1558,7 +1663,7 @@ describe('document services', () => {
     });
     expect(db.upload.updateMany).not.toHaveBeenCalled();
     expect(db.document.updateMany).toHaveBeenCalledWith({
-      where: { id: 'document_1', userId: 'user_1' },
+      where: { id: 'document_1', userId: 'user_1', status: { notIn: [DocumentStatus.READY, DocumentStatus.DELETED] } },
       data: { status: DocumentStatus.READY },
     });
   });
@@ -1639,35 +1744,18 @@ describe('document services', () => {
       externalExecutionId: 'exec_123',
     });
     expect(db.upload.updateMany).toHaveBeenCalledWith({
-      where: { id: 'upload_1', userId: 'user_1' },
+      where: { id: 'upload_1', userId: 'user_1', status: { not: UploadStatus.COMPLETED } },
       data: { status: UploadStatus.COMPLETED },
     });
     expect(db.document.updateMany).toHaveBeenCalledWith({
-      where: { id: 'document_1', userId: 'user_1' },
+      where: { id: 'document_1', userId: 'user_1', status: { notIn: [DocumentStatus.READY, DocumentStatus.DELETED] } },
       data: { status: DocumentStatus.READY },
     });
   });
 
   it('returns the last persisted workflow state when polling status fails', async () => {
-    const db = {
+    const reconciliationIssueTx = {
       workflowExecution: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'workflow_1',
-          userId: 'user_1',
-          uploadId: 'upload_1',
-          documentId: 'document_1',
-          workflowKey: 'ingestion',
-          status: WorkflowStatus.RUNNING,
-          externalExecutionId: 'exec_123',
-          requestPayload: null,
-          responsePayload: null,
-          metadata: null,
-          errorMessage: null,
-          startedAt: new Date('2026-01-01T00:00:00.000Z'),
-          completedAt: null,
-          createdAt: new Date('2026-01-01T00:00:00.000Z'),
-          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-        }),
         update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           userId: 'user_1',
@@ -1693,6 +1781,34 @@ describe('document services', () => {
           updatedAt: new Date('2026-01-01T00:02:00.000Z'),
         }),
       },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation(async (callback: (transaction: typeof reconciliationIssueTx) => Promise<unknown>) =>
+        callback(reconciliationIssueTx),
+      ),
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: null,
+          metadata: null,
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+        update: vi.fn(),
+      },
       upload: {
         updateMany: vi.fn(),
       },
@@ -1715,7 +1831,7 @@ describe('document services', () => {
       const result = await service.getWorkflowStatus('user_1', 'workflow_1');
 
       expect(executionService.pollExecution).toHaveBeenCalledWith('exec_123');
-      expect(db.workflowExecution.update).toHaveBeenCalledWith({
+      expect(reconciliationIssueTx.workflowExecution.update).toHaveBeenCalledWith({
         where: { id: 'workflow_1' },
         data: {
           metadata: {
@@ -1725,6 +1841,23 @@ describe('document services', () => {
             reconciliationSource: 'n8n_poll',
             lastReconciliationAttemptAt: '2026-01-01T00:02:00.000Z',
             lastReconciliationFailureAt: '2026-01-01T00:02:00.000Z',
+          },
+        },
+      });
+      expect(reconciliationIssueTx.auditLog.create).toHaveBeenCalledWith({
+        data: {
+          userId: 'user_1',
+          action: 'workflow.reconciliation_issue_recorded',
+          entityType: 'workflow_execution',
+          entityId: 'workflow_1',
+          metadata: {
+            workflowKey: 'ingestion',
+            workflowStatus: WorkflowStatus.RUNNING,
+            reconciliationIssue: 'UPSTREAM_UNAVAILABLE',
+            reconciliationSource: 'n8n_poll',
+            reconciliationRequired: true,
+            uploadId: 'upload_1',
+            documentId: 'document_1',
           },
         },
       });
@@ -2065,12 +2198,12 @@ describe('document services', () => {
     expect(db.workflowExecution.findFirst).toHaveBeenCalledTimes(2);
     expect(db.upload.updateMany).toHaveBeenCalledTimes(1);
     expect(db.upload.updateMany).toHaveBeenCalledWith({
-      where: { id: 'upload_1', userId: 'user_1' },
+      where: { id: 'upload_1', userId: 'user_1', status: { not: UploadStatus.INGESTING } },
       data: { status: UploadStatus.INGESTING },
     });
     expect(db.document.updateMany).toHaveBeenCalledTimes(1);
     expect(db.document.updateMany).toHaveBeenCalledWith({
-      where: { id: 'document_1', userId: 'user_1' },
+      where: { id: 'document_1', userId: 'user_1', status: { notIn: [DocumentStatus.INGESTING, DocumentStatus.DELETED] } },
       data: { status: DocumentStatus.INGESTING },
     });
   });

@@ -8,7 +8,12 @@ import { N8nExecutionService } from '@/lib/n8n/executions';
 
 type WorkflowDb = Pick<
   typeof prisma,
-  'workflowExecution' | 'upload' | 'document'
+  '$transaction' | 'workflowExecution' | 'upload' | 'document' | 'auditLog'
+>;
+
+type WorkflowTransactionDb = Pick<
+  Prisma.TransactionClient,
+  'workflowExecution' | 'upload' | 'document' | 'auditLog'
 >;
 
 export type WorkflowExecutionDto = {
@@ -55,6 +60,8 @@ export type PublicWorkflowListResult = {
 const RECONCILIATION_HEALTH_DEGRADED = 'degraded' as const;
 const RECONCILIATION_ISSUE_UPSTREAM_UNAVAILABLE = 'UPSTREAM_UNAVAILABLE' as const;
 const RECONCILIATION_SOURCE_N8N_POLL = 'n8n_poll' as const;
+const WORKFLOW_RECONCILED_ACTION = 'workflow.reconciled' as const;
+const WORKFLOW_RECONCILIATION_ISSUE_ACTION = 'workflow.reconciliation_issue_recorded' as const;
 
 export function mapN8nStatusToWorkflowStatus(status: string): WorkflowStatus {
   switch (status) {
@@ -184,6 +191,41 @@ function isActiveWorkflowStatus(status: WorkflowStatus): boolean {
   return status === WorkflowStatus.RUNNING || status === WorkflowStatus.WAITING || status === WorkflowStatus.QUEUED;
 }
 
+function mapWorkflowStatusToUploadStatus(status: WorkflowStatus): UploadStatus {
+  if (status === WorkflowStatus.SUCCESS) {
+    return UploadStatus.COMPLETED;
+  }
+
+  if (status === WorkflowStatus.CANCELED) {
+    return UploadStatus.CANCELED;
+  }
+
+  if (status === WorkflowStatus.ERROR) {
+    return UploadStatus.FAILED;
+  }
+
+  return UploadStatus.INGESTING;
+}
+
+function mapWorkflowStatusToDocumentStatus(status: WorkflowStatus): DocumentStatus {
+  if (status === WorkflowStatus.SUCCESS) {
+    return DocumentStatus.READY;
+  }
+
+  if (status === WorkflowStatus.ERROR || status === WorkflowStatus.CANCELED) {
+    return DocumentStatus.FAILED;
+  }
+
+  return DocumentStatus.INGESTING;
+}
+
+type ResourceSyncResult = {
+  uploadStatus?: UploadStatus;
+  uploadUpdated: boolean;
+  documentStatus?: DocumentStatus;
+  documentUpdated: boolean;
+};
+
 export class WorkflowService {
   constructor(
     private readonly dependencies: {
@@ -198,6 +240,10 @@ export class WorkflowService {
 
   private get executionService(): Pick<N8nExecutionService, 'pollExecution'> {
     return this.dependencies.executionService ?? new N8nExecutionService();
+  }
+
+  private get transactionRunner(): WorkflowDb {
+    return (this.dependencies.db ?? prisma) as WorkflowDb;
   }
 
   async listWorkflows(userId: string): Promise<WorkflowListResult> {
@@ -252,23 +298,36 @@ export class WorkflowService {
       try {
         const execution = await this.executionService.pollExecution(workflow.externalExecutionId);
         const nextStatus = mapN8nStatusToWorkflowStatus(execution.status);
-
-        const updatedWorkflow = await this.db.workflowExecution.update({
-          where: { id: workflow.id },
-          data: {
-            status: nextStatus,
-            startedAt: execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt,
-            completedAt: execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt,
-            errorMessage: nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null,
-            ...(execution.data === null ? {} : { responsePayload: execution.data }),
-            ...(hasPollFailureMarker(workflow.metadata) ? { metadata: clearPollFailureMetadata(workflow.metadata) } : {}),
-          },
+        const data: Prisma.WorkflowExecutionUpdateInput = {
+          status: nextStatus,
+          startedAt: execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt,
+          completedAt: execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt,
+          errorMessage: nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null,
+          ...(execution.data === null ? {} : { responsePayload: execution.data }),
+          ...(hasPollFailureMarker(workflow.metadata) ? { metadata: clearPollFailureMetadata(workflow.metadata) } : {}),
+        };
+        const shouldSync = await this.shouldSyncResourceStatuses(userId, {
+          ...workflow,
+          status: nextStatus,
+          startedAt: (data.startedAt as Date | undefined) ?? workflow.startedAt,
+          completedAt: (data.completedAt as Date | undefined) ?? workflow.completedAt,
+          errorMessage: (data.errorMessage as string | null | undefined) ?? workflow.errorMessage,
+          metadata: (data.metadata as Prisma.JsonValue | undefined) ?? workflow.metadata,
         });
 
-        if (await this.shouldSyncResourceStatuses(userId, updatedWorkflow)) {
-          await this.syncResourceStatuses(userId, updatedWorkflow);
-        }
-        return updatedWorkflow;
+        return this.runInTransaction(async (transaction) => {
+          const updatedWorkflow = await transaction.workflowExecution.update({
+            where: { id: workflow.id },
+            data,
+          });
+          const syncResult = shouldSync
+            ? await this.syncResourceStatuses(transaction, userId, updatedWorkflow)
+            : { uploadUpdated: false, documentUpdated: false };
+
+          await this.recordWorkflowReconciliationAudit(transaction, userId, updatedWorkflow, syncResult, true);
+
+          return updatedWorkflow;
+        });
       } catch {
         return this.persistRecoverablePollFailure(workflow);
       }
@@ -276,7 +335,10 @@ export class WorkflowService {
 
     if (isReconciliationRequired(workflow.metadata)) {
       if (await this.shouldSyncResourceStatuses(userId, workflow)) {
-        await this.syncResourceStatuses(userId, workflow);
+        await this.runInTransaction(async (transaction) => {
+          const syncResult = await this.syncResourceStatuses(transaction, userId, workflow);
+          await this.recordWorkflowReconciliationAudit(transaction, userId, workflow, syncResult, false);
+        });
       }
     }
 
@@ -287,11 +349,35 @@ export class WorkflowService {
     const metadata = buildPollFailureMetadata(workflow.metadata, new Date().toISOString());
 
     try {
-      return await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          metadata,
-        },
+      return await this.runInTransaction(async (transaction) => {
+        const updatedWorkflow = await transaction.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            metadata,
+          },
+        });
+
+        if (typeof transaction.auditLog?.create === 'function') {
+          await transaction.auditLog.create({
+            data: {
+              userId: workflow.userId,
+              action: WORKFLOW_RECONCILIATION_ISSUE_ACTION,
+              entityType: 'workflow_execution',
+              entityId: workflow.id,
+              metadata: {
+                workflowKey: workflow.workflowKey,
+                workflowStatus: workflow.status,
+                reconciliationIssue: RECONCILIATION_ISSUE_UPSTREAM_UNAVAILABLE,
+                reconciliationSource: RECONCILIATION_SOURCE_N8N_POLL,
+                reconciliationRequired: true,
+                ...(workflow.uploadId ? { uploadId: workflow.uploadId } : {}),
+                ...(workflow.documentId ? { documentId: workflow.documentId } : {}),
+              },
+            },
+          });
+        }
+
+        return updatedWorkflow;
       });
     } catch {
       return {
@@ -318,50 +404,117 @@ export class WorkflowService {
     return !latestWorkflow || latestWorkflow.id === workflow.id;
   }
 
-  private async syncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<void> {
+  private async runInTransaction<T>(callback: (transaction: WorkflowTransactionDb) => Promise<T>): Promise<T> {
+    const transactionRunner = this.transactionRunner;
+
+    if (typeof transactionRunner.$transaction === 'function') {
+      return transactionRunner.$transaction(async (transaction) => callback(transaction as WorkflowTransactionDb));
+    }
+
+    return callback(transactionRunner as unknown as WorkflowTransactionDb);
+  }
+
+  private async recordWorkflowReconciliationAudit(
+    transaction: WorkflowTransactionDb,
+    userId: string,
+    workflow: WorkflowExecution,
+    syncResult: ResourceSyncResult,
+    workflowUpdated: boolean,
+  ): Promise<void> {
+    if (!workflowUpdated && !syncResult.uploadStatus && !syncResult.documentStatus) {
+      return;
+    }
+
+    if (typeof transaction.auditLog?.create !== 'function') {
+      return;
+    }
+
+    await transaction.auditLog.create({
+      data: {
+        userId,
+        action: WORKFLOW_RECONCILED_ACTION,
+        entityType: 'workflow_execution',
+        entityId: workflow.id,
+        metadata: {
+          workflowKey: workflow.workflowKey,
+          workflowStatus: workflow.status,
+          ...(workflow.uploadId ? { uploadId: workflow.uploadId } : {}),
+          ...(syncResult.uploadStatus ? { uploadStatus: syncResult.uploadStatus } : {}),
+          uploadUpdated: syncResult.uploadUpdated,
+          ...(workflow.documentId ? { documentId: workflow.documentId } : {}),
+          ...(syncResult.documentStatus ? { documentStatus: syncResult.documentStatus } : {}),
+          documentUpdated: syncResult.documentUpdated,
+          reconciliationRequired: isReconciliationRequired(workflow.metadata),
+        },
+      },
+    });
+  }
+
+  private async syncResourceStatuses(
+    transaction: WorkflowTransactionDb,
+    userId: string,
+    workflow: WorkflowExecution,
+  ): Promise<ResourceSyncResult> {
     const reindexWorkflow = isReindexWorkflow(workflow.metadata);
+    const result: ResourceSyncResult = {
+      uploadUpdated: false,
+      documentUpdated: false,
+    };
 
     if (workflow.uploadId && !reindexWorkflow) {
-      await this.db.upload.updateMany({
-        where: { id: workflow.uploadId, userId },
+      const uploadStatus = mapWorkflowStatusToUploadStatus(workflow.status);
+      const uploadUpdateResult = await transaction.upload.updateMany({
+        where: { id: workflow.uploadId, userId, status: { not: uploadStatus } },
         data: {
-          status:
-            workflow.status === WorkflowStatus.SUCCESS
-              ? UploadStatus.COMPLETED
-              : workflow.status === WorkflowStatus.CANCELED
-                ? UploadStatus.CANCELED
-                : workflow.status === WorkflowStatus.ERROR
-                  ? UploadStatus.FAILED
-                  : UploadStatus.INGESTING,
+          status: uploadStatus,
         },
       });
+
+      result.uploadStatus = uploadStatus;
+      result.uploadUpdated = (uploadUpdateResult?.count ?? 0) > 0;
     }
 
     if (workflow.documentId) {
       if (reindexWorkflow) {
         if (workflow.status === WorkflowStatus.SUCCESS) {
-          await this.db.document.updateMany({
-            where: { id: workflow.documentId, userId },
+          const documentUpdateResult = await transaction.document.updateMany({
+            where: {
+              id: workflow.documentId,
+              userId,
+              status: {
+                notIn: [DocumentStatus.READY, DocumentStatus.DELETED],
+              },
+            },
             data: {
               status: DocumentStatus.READY,
             },
           });
+
+          result.documentStatus = DocumentStatus.READY;
+          result.documentUpdated = (documentUpdateResult?.count ?? 0) > 0;
         }
 
-        return;
+        return result;
       }
 
-      await this.db.document.updateMany({
-        where: { id: workflow.documentId, userId },
+      const documentStatus = mapWorkflowStatusToDocumentStatus(workflow.status);
+      const documentUpdateResult = await transaction.document.updateMany({
+        where: {
+          id: workflow.documentId,
+          userId,
+          status: {
+            notIn: [documentStatus, DocumentStatus.DELETED],
+          },
+        },
         data: {
-          status:
-            workflow.status === WorkflowStatus.SUCCESS
-              ? DocumentStatus.READY
-              : workflow.status === WorkflowStatus.ERROR || workflow.status === WorkflowStatus.CANCELED
-                ? DocumentStatus.FAILED
-                : DocumentStatus.INGESTING,
+          status: documentStatus,
         },
       });
+
+      result.documentStatus = documentStatus;
+      result.documentUpdated = (documentUpdateResult?.count ?? 0) > 0;
     }
+
+    return result;
   }
 }
