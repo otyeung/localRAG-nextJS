@@ -3,7 +3,16 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const corpusFiles = ['1706.03762v7.pdf', 'cymbal-starlight-2024.pdf'];
+import { DocumentStatus } from '@prisma/client';
+
+import { createAnonymousFingerprintHash } from '@/lib/auth/anonymous-provider';
+import { prisma } from '@/lib/db/prisma';
+import { UserRepository } from '@/lib/repositories/user-repository';
+import { UploadService, type UploadResult } from '@/lib/services/upload-service';
+import { WorkflowService, type WorkflowExecutionDto } from '@/lib/services/workflow-service';
+
+const corpusFiles = ['1706.03762v7.pdf', 'cymbal-starlight-2024.pdf'] as const;
+const SEED_USER_FINGERPRINT = 'seed-corpus-local-user';
 
 function hashFile(path: string): string {
   const hash = createHash('sha256');
@@ -11,8 +20,42 @@ function hashFile(path: string): string {
   return hash.digest('hex');
 }
 
-export function seedCorpus() {
-  const root = process.cwd();
+type CorpusRecord = {
+  file: string;
+  path: string;
+  sha256: string;
+};
+
+export type SeedCorpusResult = {
+  totalFiles: number;
+  skipped: Array<{
+    file: string;
+    documentId: string;
+  }>;
+  ingested: Array<{
+    file: string;
+    workflowExecutionId: string;
+    documentId: string;
+    uploadId: string;
+  }>;
+  failed: Array<{
+    file: string;
+    reason: string;
+  }>;
+};
+
+type SeedCorpusDependencies = {
+  userRepository?: Pick<UserRepository, 'findOrCreateAnonymousUser'>;
+  uploadService?: Pick<UploadService, 'createUpload'>;
+  workflowService?: Pick<WorkflowService, 'getWorkflowStatus'>;
+  findReadyDocumentByHash?: (userId: string, fileHash: string) => Promise<{ id: string } | null>;
+  createFingerprintHash?: (fingerprint: string) => Promise<string>;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+};
+
+function resolveCorpusRecords(root = process.cwd()): CorpusRecord[] {
   const records = corpusFiles.map((file) => {
     const path = resolve(root, file);
     statSync(path);
@@ -27,19 +70,127 @@ export function seedCorpus() {
   return records;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
+}
+
+export async function seedCorpus(dependencies: SeedCorpusDependencies = {}): Promise<SeedCorpusResult> {
+  const records = resolveCorpusRecords();
+  const userRepository = dependencies.userRepository ?? new UserRepository(prisma);
+  const uploadService = dependencies.uploadService ?? new UploadService();
+  const workflowService = dependencies.workflowService ?? new WorkflowService();
+  const fingerprintHash =
+    (await (dependencies.createFingerprintHash ?? createAnonymousFingerprintHash)(SEED_USER_FINGERPRINT));
+  const user = await userRepository.findOrCreateAnonymousUser(fingerprintHash);
+  const findReadyDocumentByHash =
+    dependencies.findReadyDocumentByHash ??
+    (async (userId: string, fileHash: string) =>
+      prisma.document.findFirst({
+        where: {
+          userId,
+          fileHash,
+          status: DocumentStatus.READY,
+          deletedAt: null,
+        },
+        select: { id: true },
+      }));
+  const wait = dependencies.sleep ?? sleep;
+  const timeoutMs = dependencies.timeoutMs ?? 120_000;
+  const pollIntervalMs = dependencies.pollIntervalMs ?? 2_000;
+  const result: SeedCorpusResult = {
+    totalFiles: records.length,
+    skipped: [],
+    ingested: [],
+    failed: [],
+  };
+
+  for (const record of records) {
+    const existingDocument = await findReadyDocumentByHash(user.id, record.sha256);
+
+    if (existingDocument) {
+      result.skipped.push({
+        file: record.file,
+        documentId: existingDocument.id,
+      });
+      continue;
+    }
+
+    let uploadResult: UploadResult;
+    try {
+      uploadResult = await uploadService.createUpload({
+        userId: user.id,
+        fileName: record.file,
+        mimeType: 'application/pdf',
+        bytes: new Uint8Array(readFileSync(record.path)),
+      });
+    } catch (error) {
+      result.failed.push({
+        file: record.file,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    const startedAt = Date.now();
+    let workflow: WorkflowExecutionDto | undefined;
+
+    while (Date.now() - startedAt <= timeoutMs) {
+      workflow = await workflowService.getWorkflowStatus(user.id, uploadResult.workflowExecutionId);
+      if (workflow.status === 'SUCCESS') {
+        result.ingested.push({
+          file: record.file,
+          workflowExecutionId: workflow.id,
+          documentId: uploadResult.documentId,
+          uploadId: uploadResult.uploadId,
+        });
+        break;
+      }
+      if (workflow.status === 'ERROR' || workflow.status === 'CANCELED') {
+        result.failed.push({
+          file: record.file,
+          reason: workflow.errorMessage ?? `Workflow finished with status ${workflow.status}.`,
+        });
+        break;
+      }
+      await wait(pollIntervalMs);
+    }
+
+    if (!workflow || (workflow.status !== 'SUCCESS' && workflow.status !== 'ERROR' && workflow.status !== 'CANCELED')) {
+      result.failed.push({
+        file: record.file,
+        reason: 'Timed out waiting for ingestion workflow completion.',
+      });
+    }
+  }
+
+  return result;
+}
+
 const executedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 const modulePath = fileURLToPath(import.meta.url);
 
 if (modulePath === executedPath) {
-  try {
-    const records = seedCorpus();
-    console.log(`[seed:corpus] verified ${records.length} corpus PDFs`);
-    for (const record of records) {
-      console.log(`${record.file} ${record.sha256}`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[seed:corpus] failed: ${message}`);
-    process.exitCode = 1;
-  }
+  seedCorpus()
+    .then((result) => {
+      console.log(`[seed:corpus] processed ${result.totalFiles} corpus files`);
+      for (const skipped of result.skipped) {
+        console.log(`[seed:corpus] skipped ${skipped.file} (${skipped.documentId})`);
+      }
+      for (const ingested of result.ingested) {
+        console.log(`[seed:corpus] ingested ${ingested.file} (${ingested.workflowExecutionId})`);
+      }
+      if (result.failed.length > 0) {
+        for (const failure of result.failed) {
+          console.error(`[seed:corpus] failed ${failure.file}: ${failure.reason}`);
+        }
+        process.exitCode = 1;
+      }
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[seed:corpus] failed: ${message}`);
+      process.exitCode = 1;
+    });
 }
