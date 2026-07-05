@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { DocumentStatus, WorkflowStatus, type Document, type PrismaClient } from '@prisma/client';
+import { DocumentStatus, WorkflowStatus, type Document, type Prisma, type PrismaClient } from '@prisma/client';
 
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
@@ -104,6 +104,17 @@ function mapWorkflowStatusToDocumentStatus(status: WorkflowStatus): DocumentStat
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unexpected error occurred.';
+}
+
+function buildReindexWorkflowMetadata(
+  previousDocumentStatus: DocumentStatus,
+  overrides: Record<string, Prisma.InputJsonValue | undefined> = {},
+): Prisma.InputJsonObject {
+  return {
+    operation: 'reindex',
+    previousDocumentStatus,
+    ...overrides,
+  } as Prisma.InputJsonObject;
 }
 
 export class DocumentService {
@@ -256,6 +267,7 @@ export class DocumentService {
         uploadId: document.uploadId,
         workflowKey: 'ingestion',
         status: WorkflowStatus.QUEUED,
+        metadata: buildReindexWorkflowMetadata(document.status),
       },
     });
 
@@ -277,6 +289,7 @@ export class DocumentService {
           data: {
             status: WorkflowStatus.ERROR,
             errorMessage: failureMessage,
+            metadata: buildReindexWorkflowMetadata(document.status),
           },
         });
 
@@ -293,7 +306,7 @@ export class DocumentService {
               error: failureMessage,
             },
           },
-        }).catch(() => undefined);
+        });
       });
 
       throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
@@ -308,18 +321,20 @@ export class DocumentService {
           data: {
             externalExecutionId: startResult.executionId,
             status: nextWorkflowStatus,
-            metadata: {
-              workflowId: startResult.workflowId,
-            },
+            metadata: buildReindexWorkflowMetadata(document.status, {
+              workflowId: startResult.workflowId ?? undefined,
+            }),
           },
         });
 
-        await transaction.document.update({
-          where: { id: document.id },
-          data: {
-            status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
-          },
-        });
+        if (nextWorkflowStatus === WorkflowStatus.SUCCESS) {
+          await transaction.document.update({
+            where: { id: document.id },
+            data: {
+              status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
+            },
+          });
+        }
 
         await transaction.auditLog.create({
           data: {
@@ -352,11 +367,11 @@ export class DocumentService {
           data: {
             externalExecutionId: startResult.executionId,
             status: nextWorkflowStatus,
-            metadata: {
-              workflowId: startResult.workflowId,
+            metadata: buildReindexWorkflowMetadata(document.status, {
+              workflowId: startResult.workflowId ?? undefined,
               reconciliationRequired: true,
               localPersistenceError,
-            },
+            }),
           },
         });
 
@@ -374,7 +389,7 @@ export class DocumentService {
               error: localPersistenceError,
             },
           },
-        }).catch(() => undefined);
+        });
       });
 
       throw new AppError(

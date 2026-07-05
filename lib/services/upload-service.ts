@@ -202,49 +202,52 @@ export class UploadService {
       });
     } catch (error) {
       const failureMessage = errorMessage(error);
-      await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) => {
-        await transaction.upload.update({
-          where: { id: upload.id },
-          data: {
-            status: UploadStatus.FAILED,
-            errorMessage: failureMessage,
-          },
-        });
-
-        await transaction.document.update({
-          where: { id: document.id },
-          data: {
-            status: 'FAILED',
-          },
-        });
-
-        await transaction.workflowExecution.update({
-          where: { id: workflow.id },
-          data: {
-            status: WorkflowStatus.ERROR,
-            errorMessage: failureMessage,
-          },
-        });
-
-        await transaction.auditLog.create({
-          data: {
-            userId: input.userId,
-            action: 'upload.ingestion_start_failed',
-            entityType: 'upload',
-            entityId: upload.id,
-            requestId: input.requestId,
-            ipAddress: input.ipAddress,
-            userAgent: input.userAgent,
-            metadata: {
-              documentId: document.id,
-              workflowExecutionId: workflow.id,
-              error: failureMessage,
+      try {
+        await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) => {
+          await transaction.upload.update({
+            where: { id: upload.id },
+            data: {
+              status: UploadStatus.FAILED,
+              errorMessage: failureMessage,
             },
-          },
-        }).catch(() => undefined);
-      });
+          });
 
-      await this.removeTempFile(storagePath);
+          await transaction.document.update({
+            where: { id: document.id },
+            data: {
+              status: 'FAILED',
+            },
+          });
+
+          await transaction.workflowExecution.update({
+            where: { id: workflow.id },
+            data: {
+              status: WorkflowStatus.ERROR,
+              errorMessage: failureMessage,
+            },
+          });
+
+          await transaction.auditLog.create({
+            data: {
+              userId: input.userId,
+              action: 'upload.ingestion_start_failed',
+              entityType: 'upload',
+              entityId: upload.id,
+              requestId: input.requestId,
+              ipAddress: input.ipAddress,
+              userAgent: input.userAgent,
+              metadata: {
+                documentId: document.id,
+                workflowExecutionId: workflow.id,
+                error: failureMessage,
+              },
+            },
+          });
+        });
+      } finally {
+        await this.removeTempFile(storagePath);
+      }
+
       throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
     }
 
@@ -341,7 +344,7 @@ export class UploadService {
                 error: localPersistenceError,
               },
             },
-          }).catch(() => undefined);
+          });
 
           return updatedWorkflow;
         },

@@ -115,6 +115,14 @@ function isReconciliationRequired(metadata: unknown): boolean {
   return metadata instanceof Object && 'reconciliationRequired' in metadata && metadata.reconciliationRequired === true;
 }
 
+function isReindexWorkflow(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return false;
+  }
+
+  return metadata instanceof Object && 'operation' in metadata && metadata.operation === 'reindex';
+}
+
 function isActiveWorkflowStatus(status: WorkflowStatus): boolean {
   return status === WorkflowStatus.RUNNING || status === WorkflowStatus.WAITING || status === WorkflowStatus.QUEUED;
 }
@@ -231,7 +239,9 @@ export class WorkflowService {
   }
 
   private async syncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<void> {
-    if (workflow.uploadId) {
+    const reindexWorkflow = isReindexWorkflow(workflow.metadata);
+
+    if (workflow.uploadId && !reindexWorkflow) {
       await this.db.upload.updateMany({
         where: { id: workflow.uploadId, userId },
         data: {
@@ -248,6 +258,19 @@ export class WorkflowService {
     }
 
     if (workflow.documentId) {
+      if (reindexWorkflow) {
+        if (workflow.status === WorkflowStatus.SUCCESS) {
+          await this.db.document.updateMany({
+            where: { id: workflow.documentId, userId },
+            data: {
+              status: DocumentStatus.READY,
+            },
+          });
+        }
+
+        return;
+      }
+
       await this.db.document.updateMany({
         where: { id: workflow.documentId, userId },
         data: {

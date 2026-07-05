@@ -357,7 +357,7 @@ describe('document services', () => {
     });
   });
 
-  it('preserves upload failure state when the start-failure audit write fails', async () => {
+  it('fails the upload start-failure transition when the audit write fails', async () => {
     const createTx = {
       upload: {
         create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
@@ -430,9 +430,7 @@ describe('document services', () => {
         mimeType: 'application/pdf',
         bytes: Buffer.from('hello world'),
       }),
-    ).rejects.toMatchObject({
-      code: 'UPSTREAM_ERROR',
-    });
+    ).rejects.toThrow('audit write failed');
 
     expect(failureTx.upload.update).toHaveBeenCalledOnce();
     expect(failureTx.document.update).toHaveBeenCalledOnce();
@@ -949,7 +947,7 @@ describe('document services', () => {
     expect(db.document.update).not.toHaveBeenCalled();
   });
 
-  it('records reindex audit logging in the same transaction as workflow/document updates', async () => {
+  it('records reindex audit logging in the same transaction as workflow updates without downgrading the document', async () => {
     const tx = {
       workflowExecution: {
         update: vi.fn().mockResolvedValue({
@@ -981,6 +979,7 @@ describe('document services', () => {
           id: 'document_1',
           userId: 'user_1',
           uploadId: 'upload_1',
+          status: DocumentStatus.READY,
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
@@ -1014,22 +1013,32 @@ describe('document services', () => {
       status: 'RUNNING',
     });
     expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.workflowExecution.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        documentId: 'document_1',
+        uploadId: 'upload_1',
+        workflowKey: 'ingestion',
+        status: WorkflowStatus.QUEUED,
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+        },
+      },
+    });
     expect(tx.workflowExecution.update).toHaveBeenCalledWith({
       where: { id: 'workflow_1' },
       data: {
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
         metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
           workflowId: 'workflow_123',
         },
       },
     });
-    expect(tx.document.update).toHaveBeenCalledWith({
-      where: { id: 'document_1' },
-      data: {
-        status: DocumentStatus.INGESTING,
-      },
-    });
+    expect(tx.document.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
@@ -1087,6 +1096,7 @@ describe('document services', () => {
           id: 'document_1',
           userId: 'user_1',
           uploadId: 'upload_1',
+          status: DocumentStatus.READY,
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
@@ -1128,6 +1138,8 @@ describe('document services', () => {
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
         metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
           workflowId: 'workflow_123',
           reconciliationRequired: true,
           localPersistenceError: 'audit write failed',
@@ -1167,6 +1179,7 @@ describe('document services', () => {
           id: 'document_1',
           userId: 'user_1',
           uploadId: 'upload_1',
+          status: DocumentStatus.READY,
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
@@ -1197,6 +1210,10 @@ describe('document services', () => {
       data: {
         status: WorkflowStatus.ERROR,
         errorMessage: 'n8n unavailable',
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+        },
       },
     });
     expect(failureTx.auditLog.create).toHaveBeenCalledWith({
@@ -1247,6 +1264,7 @@ describe('document services', () => {
           id: 'document_1',
           userId: 'user_1',
           uploadId: 'upload_1',
+          status: DocumentStatus.READY,
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
@@ -1287,6 +1305,8 @@ describe('document services', () => {
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
         metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
           workflowId: 'workflow_123',
           reconciliationRequired: true,
           localPersistenceError: 'audit write failed',
@@ -1310,7 +1330,7 @@ describe('document services', () => {
     });
   });
 
-  it('preserves reindex reconciliation state when the audit write fails', async () => {
+  it('fails reindex reconciliation persistence when the audit write fails', async () => {
     const reconciliationTx = {
       workflowExecution: {
         update: vi.fn().mockResolvedValue({
@@ -1342,6 +1362,7 @@ describe('document services', () => {
           id: 'document_1',
           userId: 'user_1',
           uploadId: 'upload_1',
+          status: DocumentStatus.READY,
           title: 'Quarterly Report',
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
@@ -1371,9 +1392,7 @@ describe('document services', () => {
       } as never,
     });
 
-    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
-      code: 'INTERNAL_ERROR',
-    });
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toThrow('audit insert failed');
 
     expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledOnce();
     expect(reconciliationTx.auditLog.create).toHaveBeenCalledOnce();
@@ -1431,6 +1450,113 @@ describe('document services', () => {
       where: { id: 'upload_1', userId: 'user_1' },
       data: { status: UploadStatus.COMPLETED },
     });
+    expect(db.document.updateMany).toHaveBeenCalledWith({
+      where: { id: 'document_1', userId: 'user_1' },
+      data: { status: DocumentStatus.READY },
+    });
+  });
+
+  it('does not downgrade existing resources when a reindex workflow fails', async () => {
+    const db = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.ERROR,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: { ok: false },
+          metadata: {
+            operation: 'reindex',
+            previousDocumentStatus: DocumentStatus.READY,
+            reconciliationRequired: true,
+          },
+          errorMessage: 'workflow failed',
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+        findMany: vi.fn(),
+        update: vi.fn(),
+      },
+      upload: {
+        updateMany: vi.fn(),
+      },
+      document: {
+        updateMany: vi.fn(),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    const result = await service.getWorkflowStatus('user_1', 'workflow_1');
+
+    expect(result).toMatchObject({
+      id: 'workflow_1',
+      status: 'ERROR',
+      errorMessage: 'workflow failed',
+    });
+    expect(db.upload.updateMany).not.toHaveBeenCalled();
+    expect(db.document.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('marks the document ready after a successful reindex without mutating the original upload', async () => {
+    const db = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: { ok: true },
+          metadata: {
+            operation: 'reindex',
+            previousDocumentStatus: DocumentStatus.FAILED,
+            reconciliationRequired: true,
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+        findMany: vi.fn(),
+        update: vi.fn(),
+      },
+      upload: {
+        updateMany: vi.fn(),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: {
+        pollExecution: vi.fn(),
+      } as never,
+    });
+
+    const result = await service.getWorkflowStatus('user_1', 'workflow_1');
+
+    expect(result).toMatchObject({
+      id: 'workflow_1',
+      status: 'SUCCESS',
+      externalExecutionId: 'exec_123',
+    });
+    expect(db.upload.updateMany).not.toHaveBeenCalled();
     expect(db.document.updateMany).toHaveBeenCalledWith({
       where: { id: 'document_1', userId: 'user_1' },
       data: { status: DocumentStatus.READY },
