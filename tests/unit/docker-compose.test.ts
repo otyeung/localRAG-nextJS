@@ -54,6 +54,7 @@ describe('docker compose', () => {
     expect(compose).toContain('qdrant-init:');
     expect(compose).toContain('service_completed_successfully');
     expect(compose).toContain('condition: service_started');
+    expect(compose).not.toContain('qdrant:\n        condition: service_healthy');
     expect(compose).toContain('QDRANT_VECTOR_SIZE');
     expect(compose).toContain('QDRANT_DISTANCE');
     expect(compose).toContain('OPENAI_EMBEDDING_MODEL');

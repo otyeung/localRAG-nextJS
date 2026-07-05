@@ -62,8 +62,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
       qdrant-init:
         condition: service_completed_successfully
     environment:
@@ -117,8 +115,6 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
-        condition: service_healthy
-      qdrant:
         condition: service_healthy
       qdrant-init:
         condition: service_completed_successfully
