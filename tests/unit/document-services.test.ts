@@ -28,7 +28,7 @@ describe('document services', () => {
   });
 
   it('creates an upload, document, and workflow execution before starting ingestion', async () => {
-    const tx = {
+    const createTx = {
       upload: {
         create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
       },
@@ -39,8 +39,7 @@ describe('document services', () => {
         create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
       },
     };
-    const db = {
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    const acceptedTx = {
       upload: {
         update: vi.fn().mockResolvedValue({ id: 'upload_1', status: UploadStatus.INGESTING }),
       },
@@ -53,6 +52,29 @@ describe('document services', () => {
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
         }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof acceptedTx) => Promise<unknown>) =>
+          callback(acceptedTx),
+        ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
       },
     };
     const validationService = {
@@ -71,16 +93,11 @@ describe('document services', () => {
         status: 'running',
       }),
     };
-    const auditService = {
-      record: vi.fn().mockResolvedValue(undefined),
-    };
-
     const service = new UploadService({
       db: db as never,
       validationService: validationService as never,
       virusScanService: virusScanService as never,
       ingestionService: ingestionService as never,
-      auditService: auditService as never,
       uploadConfig: {
         maxBytes: 10_000_000,
         tempDirectory: uploadTestDirectory,
@@ -104,10 +121,10 @@ describe('document services', () => {
       externalExecutionId: 'exec_123',
       status: 'RUNNING',
     });
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(tx.upload.create).toHaveBeenCalledOnce();
-    expect(tx.document.create).toHaveBeenCalledOnce();
-    expect(tx.workflowExecution.create).toHaveBeenCalledOnce();
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(createTx.upload.create).toHaveBeenCalledOnce();
+    expect(createTx.document.create).toHaveBeenCalledOnce();
+    expect(createTx.workflowExecution.create).toHaveBeenCalledOnce();
     expect(validationService.validate).toHaveBeenCalledWith({
       fileName: 'Quarterly Report.PDF',
       mimeType: 'application/pdf',
@@ -122,18 +139,20 @@ describe('document services', () => {
       mimeType: 'application/pdf',
       requestId: 'req_upload',
     });
-    expect(auditService.record).toHaveBeenCalledWith({
-      userId: 'user_1',
-      action: 'upload.created',
-      entityType: 'upload',
-      entityId: 'upload_1',
-      requestId: 'req_upload',
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: expect.objectContaining({
-        documentId: 'document_1',
-        workflowExecutionId: 'workflow_1',
-      }),
+    expect(acceptedTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'upload.created',
+        entityType: 'upload',
+        entityId: 'upload_1',
+        requestId: 'req_upload',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: expect.objectContaining({
+          documentId: 'document_1',
+          workflowExecutionId: 'workflow_1',
+        }),
+      },
     });
     expect(existsSync(result.storagePath)).toBe(true);
   });
@@ -175,9 +194,6 @@ describe('document services', () => {
       } as never,
       ingestionService: {
         startDocumentIngestion: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
-      } as never,
-      auditService: {
-        record: vi.fn(),
       } as never,
       uploadConfig: {
         maxBytes: 10_000_000,
@@ -222,8 +238,110 @@ describe('document services', () => {
     expect(readdirSync(uploadTestDirectory)).toHaveLength(0);
   });
 
+  it('preserves live ingestion state when post-start persistence fails after n8n accepts the upload', async () => {
+    const createTx = {
+      upload: {
+        create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
+      },
+      document: {
+        create: vi.fn().mockResolvedValue({ id: 'document_1' }),
+      },
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({ id: 'workflow_1' }),
+      },
+    };
+    const acceptedStatusError = new Error('audit write failed');
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockRejectedValueOnce(acceptedStatusError),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const service = new UploadService({
+      db: db as never,
+      validationService: {
+        validate: vi.fn().mockResolvedValue({
+          normalizedExtension: 'pdf',
+          normalizedMimeType: 'application/pdf',
+        }),
+      } as never,
+      virusScanService: {
+        scanFile: vi.fn().mockResolvedValue({ clean: true, scanner: 'local-noop' }),
+      } as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockResolvedValue({
+          executionId: 'exec_123',
+          workflowId: 'workflow_123',
+          status: 'running',
+        }),
+      } as never,
+      uploadConfig: {
+        maxBytes: 10_000_000,
+        tempDirectory: uploadTestDirectory,
+      },
+    });
+
+    await expect(
+      service.createUpload({
+        userId: 'user_1',
+        fileName: 'Quarterly Report.PDF',
+        mimeType: 'application/pdf',
+        bytes: Buffer.from('hello world'),
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(db.upload.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: UploadStatus.FAILED }),
+      }),
+    );
+    expect(db.document.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: DocumentStatus.FAILED }),
+      }),
+    );
+    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        externalExecutionId: 'exec_123',
+        status: WorkflowStatus.RUNNING,
+        metadata: {
+          workflowId: 'workflow_123',
+          reconciliationRequired: true,
+          localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(existsSync(uploadTestDirectory)).toBe(true);
+    expect(readdirSync(uploadTestDirectory)).toHaveLength(1);
+  });
+
   it('uses unique temp storage paths for same-name uploads', async () => {
-    const tx = {
+    const createTx = {
       upload: {
         create: vi
           .fn()
@@ -243,8 +361,7 @@ describe('document services', () => {
           .mockResolvedValueOnce({ id: 'workflow_2' }),
       },
     };
-    const db = {
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    const acceptedTx = {
       upload: {
         update: vi
           .fn()
@@ -271,6 +388,33 @@ describe('document services', () => {
             externalExecutionId: 'exec_2',
           }),
       },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof acceptedTx) => Promise<unknown>) =>
+          callback(acceptedTx),
+        )
+        .mockImplementationOnce(async (callback: (transaction: typeof createTx) => Promise<unknown>) => callback(createTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof acceptedTx) => Promise<unknown>) =>
+          callback(acceptedTx),
+        ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
     };
     const service = new UploadService({
       db: db as never,
@@ -288,9 +432,6 @@ describe('document services', () => {
           .fn()
           .mockResolvedValueOnce({ executionId: 'exec_1', workflowId: 'wf_1', status: 'running' })
           .mockResolvedValueOnce({ executionId: 'exec_2', workflowId: 'wf_2', status: 'running' }),
-      } as never,
-      auditService: {
-        record: vi.fn().mockResolvedValue(undefined),
       } as never,
       uploadConfig: {
         maxBytes: 10_000_000,
@@ -508,6 +649,9 @@ describe('document services', () => {
       data: {
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
+        metadata: {
+          workflowId: 'workflow_123',
+        },
       },
     });
     expect(tx.document.update).toHaveBeenCalledWith({
@@ -530,6 +674,79 @@ describe('document services', () => {
         },
       },
     });
+  });
+
+  it('preserves accepted reindex executions when post-start persistence fails', async () => {
+    const persistenceError = new Error('audit write failed');
+    const db = {
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            workflowId: 'workflow_123',
+            reconciliationRequired: true,
+            localPersistenceError: 'audit write failed',
+          },
+        }),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn().mockRejectedValue(persistenceError),
+    };
+    const ingestionService = {
+      startDocumentIngestion: vi.fn().mockResolvedValue({
+        executionId: 'exec_123',
+        workflowId: 'workflow_123',
+        status: 'running',
+      }),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: ingestionService as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: 'workflow_1' },
+      data: {
+        externalExecutionId: 'exec_123',
+        status: WorkflowStatus.RUNNING,
+        metadata: {
+          workflowId: 'workflow_123',
+          reconciliationRequired: true,
+          localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(db.document.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: DocumentStatus.FAILED }),
+      }),
+    );
   });
 
   it('polls running workflows and persists normalized completion status', async () => {

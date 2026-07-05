@@ -62,6 +62,22 @@ function toDocumentDto(document: Document): DocumentDto {
   };
 }
 
+function mapWorkflowStatusToDocumentStatus(status: WorkflowStatus): DocumentStatus {
+  switch (status) {
+    case WorkflowStatus.SUCCESS:
+      return DocumentStatus.READY;
+    case WorkflowStatus.ERROR:
+    case WorkflowStatus.CANCELED:
+      return DocumentStatus.FAILED;
+    default:
+      return DocumentStatus.INGESTING;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'An unexpected error occurred.';
+}
+
 export class DocumentService {
   constructor(
     private readonly dependencies: {
@@ -214,55 +230,91 @@ export class DocumentService {
       },
     });
 
-    const startResult = await this.ingestionService.startDocumentIngestion({
-      documentId: document.id,
-      uploadId: document.uploadId,
-      filePath: document.storagePath,
-      fileName: document.originalFilename,
-      mimeType: document.mimeType,
-      requestId,
-    });
+    let startResult: Awaited<ReturnType<Pick<N8nIngestionService, 'startDocumentIngestion'>['startDocumentIngestion']>>;
+    try {
+      startResult = await this.ingestionService.startDocumentIngestion({
+        documentId: document.id,
+        uploadId: document.uploadId,
+        filePath: document.storagePath,
+        fileName: document.originalFilename,
+        mimeType: document.mimeType,
+        requestId,
+      });
+    } catch (error) {
+      await this.db.workflowExecution.update({
+        where: { id: workflow.id },
+        data: {
+          status: WorkflowStatus.ERROR,
+          errorMessage: errorMessage(error),
+        },
+      });
+
+      throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
+    }
 
     const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
 
-    const updatedWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
-      const updatedWorkflow = await transaction.workflowExecution.update({
+    try {
+      const updatedWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+        const updatedWorkflow = await transaction.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            externalExecutionId: startResult.executionId,
+            status: nextWorkflowStatus,
+            metadata: {
+              workflowId: startResult.workflowId,
+            },
+          },
+        });
+
+        await transaction.document.update({
+          where: { id: document.id },
+          data: {
+            status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
+          },
+        });
+
+        await transaction.auditLog.create({
+          data: {
+            userId,
+            action: 'document.reindex_requested',
+            entityType: 'document',
+            entityId: document.id,
+            requestId,
+            metadata: {
+              workflowExecutionId: workflow.id,
+              externalExecutionId: startResult.executionId,
+              uploadId: document.uploadId,
+            },
+          },
+        });
+
+        return updatedWorkflow;
+      });
+
+      return {
+        workflowExecutionId: updatedWorkflow.id,
+        externalExecutionId: updatedWorkflow.externalExecutionId,
+        status: updatedWorkflow.status,
+      };
+    } catch (error) {
+      await this.db.workflowExecution.update({
         where: { id: workflow.id },
         data: {
           externalExecutionId: startResult.executionId,
           status: nextWorkflowStatus,
-        },
-      });
-
-      await transaction.document.update({
-        where: { id: document.id },
-        data: {
-          status: DocumentStatus.INGESTING,
-        },
-      });
-
-      await transaction.auditLog.create({
-        data: {
-          userId,
-          action: 'document.reindex_requested',
-          entityType: 'document',
-          entityId: document.id,
-          requestId,
           metadata: {
-            workflowExecutionId: workflow.id,
-            externalExecutionId: startResult.executionId,
-            uploadId: document.uploadId,
+            workflowId: startResult.workflowId,
+            reconciliationRequired: true,
+            localPersistenceError: errorMessage(error),
           },
         },
       });
 
-      return updatedWorkflow;
-    });
-
-    return {
-      workflowExecutionId: updatedWorkflow.id,
-      externalExecutionId: updatedWorkflow.externalExecutionId,
-      status: updatedWorkflow.status,
-    };
+      throw new AppError(
+        'INTERNAL_ERROR',
+        'Document ingestion started, but local state reconciliation is required.',
+      );
+    }
   }
 }

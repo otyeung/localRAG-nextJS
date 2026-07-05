@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DocumentStatus } from '@prisma/client';
@@ -55,7 +55,41 @@ type SeedCorpusDependencies = {
   pollIntervalMs?: number;
 };
 
-function resolveCorpusRecords(root = process.cwd()): CorpusRecord[] {
+function hasRepositoryMarkers(root: string): boolean {
+  return existsSync(resolve(root, 'package.json')) && corpusFiles.every((file) => existsSync(resolve(root, file)));
+}
+
+function findRepositoryRoot(startPath: string): string | null {
+  let current = startPath;
+
+  while (true) {
+    if (hasRepositoryMarkers(current)) {
+      return current;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function resolveRepositoryRoot(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const searchRoots = [process.cwd(), moduleDirectory];
+
+  for (const searchRoot of searchRoots) {
+    const resolvedRoot = findRepositoryRoot(resolve(searchRoot));
+    if (resolvedRoot) {
+      return resolvedRoot;
+    }
+  }
+
+  throw new Error('Unable to locate repository root for seed corpus files.');
+}
+
+function resolveCorpusRecords(root = resolveRepositoryRoot()): CorpusRecord[] {
   const records = corpusFiles.map((file) => {
     const path = resolve(root, file);
     statSync(path);

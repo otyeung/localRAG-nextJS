@@ -10,13 +10,13 @@ import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { N8nIngestionService } from '@/lib/n8n/ingestion';
-import { AuditService } from '@/lib/services/audit-service';
 import { UploadValidationService } from '@/lib/services/upload-validation-service';
 import { VirusScanService } from '@/lib/services/virus-scan-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 
-type UploadDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
+type UploadDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
 type UploadTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
+type AcceptedUploadStateTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution' | 'auditLog'>;
 type TransactionRunner = Pick<PrismaClient, '$transaction'>;
 
 export type CreateUploadInput = {
@@ -90,6 +90,10 @@ function mapWorkflowStatusToDocumentStatus(status: WorkflowStatus): 'READY' | 'F
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'An unexpected error occurred.';
+}
+
 export class UploadService {
   constructor(
     private readonly dependencies: {
@@ -97,7 +101,6 @@ export class UploadService {
       validationService?: Pick<UploadValidationService, 'validate'>;
       virusScanService?: Pick<VirusScanService, 'scanFile'>;
       ingestionService?: Pick<N8nIngestionService, 'startDocumentIngestion'>;
-      auditService?: Pick<AuditService, 'record'>;
       transactionRunner?: TransactionRunner;
       uploadConfig?: {
         maxBytes: number;
@@ -120,10 +123,6 @@ export class UploadService {
 
   private get ingestionService(): Pick<N8nIngestionService, 'startDocumentIngestion'> {
     return this.dependencies.ingestionService ?? new N8nIngestionService();
-  }
-
-  private get auditService(): Pick<AuditService, 'record'> {
-    return this.dependencies.auditService ?? new AuditService();
   }
 
   private get uploadConfig(): { maxBytes: number; tempDirectory: string } {
@@ -151,107 +150,140 @@ export class UploadService {
     });
 
     const storagePath = await this.persistUploadBytes(input.fileName, input.bytes);
+    let upload: { id: string };
+    let document: { id: string };
+    let workflow: { id: string };
+
     try {
       await this.virusScanService.scanFile(storagePath);
       const fileHash = createFileHash(input.bytes);
-      const { upload, document, workflow } = await this.createUploadRecords({
+      ({ upload, document, workflow } = await this.createUploadRecords({
         userId: input.userId,
         fileName: input.fileName,
         mimeType: validation.normalizedMimeType,
         fileSizeBytes: input.bytes.byteLength,
         fileHash,
         storagePath,
+      }));
+    } catch (error) {
+      await this.removeTempFile(storagePath);
+      throw error;
+    }
+
+    let startResult: Awaited<ReturnType<Pick<N8nIngestionService, 'startDocumentIngestion'>['startDocumentIngestion']>>;
+    try {
+      startResult = await this.ingestionService.startDocumentIngestion({
+        documentId: document.id,
+        uploadId: upload.id,
+        filePath: storagePath,
+        fileName: input.fileName,
+        mimeType: validation.normalizedMimeType,
+        requestId: input.requestId,
       });
+    } catch (error) {
+      await Promise.all([
+        this.db.upload.update({
+          where: { id: upload.id },
+          data: {
+            status: UploadStatus.FAILED,
+            errorMessage: errorMessage(error),
+          },
+        }),
+        this.db.document.update({
+          where: { id: document.id },
+          data: {
+            status: 'FAILED',
+          },
+        }),
+        this.db.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            status: WorkflowStatus.ERROR,
+            errorMessage: errorMessage(error),
+          },
+        }),
+      ]);
+      await this.removeTempFile(storagePath);
+      throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
+    }
 
-      try {
-        const startResult = await this.ingestionService.startDocumentIngestion({
-          documentId: document.id,
-          uploadId: upload.id,
-          filePath: storagePath,
-          fileName: input.fileName,
-          mimeType: validation.normalizedMimeType,
-          requestId: input.requestId,
-        });
-        const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
+    const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
 
-        await Promise.all([
-          this.db.upload.update({
+    try {
+      const updatedWorkflow = await this.transactionRunner.$transaction(
+        async (transaction: AcceptedUploadStateTransactionDb) => {
+          await transaction.upload.update({
             where: { id: upload.id },
             data: {
               status: mapWorkflowStatusToUploadStatus(nextWorkflowStatus),
             },
-          }),
-          this.db.document.update({
+          });
+
+          await transaction.document.update({
             where: { id: document.id },
             data: {
               status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
             },
-          }),
-        ]);
+          });
 
-        const updatedWorkflow = await this.db.workflowExecution.update({
-          where: { id: workflow.id },
-          data: {
-            externalExecutionId: startResult.executionId,
-            status: nextWorkflowStatus,
-            metadata: {
-              workflowId: startResult.workflowId,
-            },
-          },
-        });
-
-        await this.auditService.record({
-          userId: input.userId,
-          action: 'upload.created',
-          entityType: 'upload',
-          entityId: upload.id,
-          requestId: input.requestId,
-          ipAddress: input.ipAddress,
-          userAgent: input.userAgent,
-          metadata: {
-            documentId: document.id,
-            workflowExecutionId: workflow.id,
-            externalExecutionId: startResult.executionId,
-          },
-        });
-
-        return {
-          uploadId: upload.id,
-          documentId: document.id,
-          workflowExecutionId: workflow.id,
-          externalExecutionId: updatedWorkflow.externalExecutionId,
-          status: updatedWorkflow.status,
-          storagePath,
-        };
-      } catch (error) {
-        await Promise.all([
-          this.db.upload.update({
-            where: { id: upload.id },
-            data: {
-              status: UploadStatus.FAILED,
-              errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
-            },
-          }),
-          this.db.document.update({
-            where: { id: document.id },
-            data: {
-              status: 'FAILED',
-            },
-          }),
-          this.db.workflowExecution.update({
+          const updatedWorkflow = await transaction.workflowExecution.update({
             where: { id: workflow.id },
             data: {
-              status: WorkflowStatus.ERROR,
-              errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
+              externalExecutionId: startResult.executionId,
+              status: nextWorkflowStatus,
+              metadata: {
+                workflowId: startResult.workflowId,
+              },
             },
-          }),
-        ]);
+          });
 
-        throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
-      }
+          await transaction.auditLog.create({
+            data: {
+              userId: input.userId,
+              action: 'upload.created',
+              entityType: 'upload',
+              entityId: upload.id,
+              requestId: input.requestId,
+              ipAddress: input.ipAddress,
+              userAgent: input.userAgent,
+              metadata: {
+                documentId: document.id,
+                workflowExecutionId: workflow.id,
+                externalExecutionId: startResult.executionId,
+              },
+            },
+          });
+
+          return updatedWorkflow;
+        },
+      );
+
+      return {
+        uploadId: upload.id,
+        documentId: document.id,
+        workflowExecutionId: workflow.id,
+        externalExecutionId: updatedWorkflow.externalExecutionId,
+        status: updatedWorkflow.status,
+        storagePath,
+      };
     } catch (error) {
-      await this.removeTempFile(storagePath);
-      throw error;
+      await this.db.workflowExecution.update({
+        where: { id: workflow.id },
+        data: {
+          externalExecutionId: startResult.executionId,
+          status: nextWorkflowStatus,
+          metadata: {
+            workflowId: startResult.workflowId,
+            reconciliationRequired: true,
+            localPersistenceError: errorMessage(error),
+          },
+        },
+      });
+
+      throw new AppError(
+        'INTERNAL_ERROR',
+        'Document ingestion started, but local state reconciliation is required.',
+      );
     }
   }
 
