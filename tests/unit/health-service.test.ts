@@ -1,10 +1,44 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
 import { HealthService } from '@/lib/services/health-service';
 
+const requiredEnvEntries = {
+  NODE_ENV: 'test',
+  DATABASE_URL: 'postgresql://localhost:5432/localrag_nextjs',
+  N8N_BASE_URL: 'https://n8n.example.com',
+  N8N_API_KEY: 'n8n-test',
+  OPENAI_API_KEY: 'sk-test',
+  OPENAI_MODEL: 'gpt-4.1-mini',
+  QDRANT_URL: 'http://qdrant.example.com:6333',
+  QDRANT_COLLECTION: 'documents',
+  ANONYMOUS_COOKIE_SECRET: 'localrag-nextjs-test-anonymous-cookie-secret',
+} as const;
+
+async function loadHealthService() {
+  vi.resetModules();
+  const module = await import('@/lib/services/health-service');
+  return module.HealthService;
+}
+
+function applyRequiredEnv(overrides: Partial<Record<keyof typeof requiredEnvEntries, string>>) {
+  for (const [key, value] of Object.entries({ ...requiredEnvEntries, ...overrides })) {
+    vi.stubEnv(key, value);
+  }
+}
+
 describe('HealthService', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   it('reports component health without secret values', async () => {
     const service = new HealthService({
       now: () => new Date('2026-01-01T00:00:00.000Z'),
@@ -123,5 +157,127 @@ describe('HealthService', () => {
       ]),
     );
     expect(JSON.stringify(health)).not.toContain('qdrant ping failed');
+  });
+
+  it('keeps n8n healthy when OpenAI env is missing', async () => {
+    applyRequiredEnv({
+      OPENAI_API_KEY: '',
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url === 'https://n8n.example.com/healthz') {
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://n8n.example.com/api/v1/workflows?active=true') {
+        return new Response(JSON.stringify({ data: [{ id: 'wf_1', name: 'Ingestion', active: true }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'healthy',
+          message: 'n8n is healthy with 1 active workflows.',
+        }),
+        expect.objectContaining({
+          name: 'openai',
+          status: 'degraded',
+          message: 'OpenAI configuration is incomplete.',
+        }),
+      ]),
+    );
+  });
+
+  it('keeps OpenAI healthy when n8n env is missing', async () => {
+    applyRequiredEnv({
+      N8N_API_KEY: '',
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      getN8nStatus: vi.fn().mockResolvedValue({
+        healthy: false,
+        workflowCount: 0,
+      }),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'degraded',
+          message: 'n8n API unavailable or workflows could not be listed.',
+        }),
+        expect.objectContaining({
+          name: 'openai',
+          status: 'healthy',
+          message: 'OpenAI model "gpt-4.1-mini" is configured.',
+        }),
+      ]),
+    );
+  });
+
+  it('isolates a missing Qdrant URL to the Qdrant check', async () => {
+    applyRequiredEnv({
+      QDRANT_URL: '',
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      getN8nStatus: vi.fn().mockResolvedValue({
+        healthy: true,
+        workflowCount: 1,
+      }),
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.status).toBe('degraded');
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'qdrant',
+          status: 'degraded',
+          message: 'Qdrant configuration or connectivity is unavailable.',
+        }),
+        expect.objectContaining({
+          name: 'openai',
+          status: 'healthy',
+          message: 'OpenAI model "gpt-4.1-mini" is configured.',
+        }),
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'healthy',
+          message: 'n8n is healthy with 1 active workflows.',
+        }),
+      ]),
+    );
   });
 });
