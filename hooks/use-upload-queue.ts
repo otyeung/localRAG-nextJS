@@ -144,16 +144,27 @@ export function useUploadQueue() {
         };
 
         xhr.onload = () => {
-          const responseBody = (xhr.response ?? JSON.parse(xhr.responseText || '{}')) as
-            | ApiResponse<UploadResult>
-            | { error?: { message?: string } };
+          let responseBody: ApiResponse<UploadResult> | { error?: { message?: string } } | null;
 
-          if (xhr.status >= 200 && xhr.status < 300 && 'data' in responseBody) {
+          try {
+            responseBody = (xhr.response ?? JSON.parse(xhr.responseText || '{}')) as
+              | ApiResponse<UploadResult>
+              | { error?: { message?: string } };
+          } catch {
+            reject(new Error('Upload failed.'));
+            return;
+          }
+
+          if (xhr.status >= 200 && xhr.status < 300 && responseBody && 'data' in responseBody) {
             resolve(responseBody.data);
             return;
           }
 
-          reject(new Error('error' in responseBody ? responseBody.error?.message ?? 'Upload failed.' : 'Upload failed.'));
+          reject(
+            new Error(
+              responseBody && 'error' in responseBody ? responseBody.error?.message ?? 'Upload failed.' : 'Upload failed.',
+            ),
+          );
         };
 
         const formData = new FormData();

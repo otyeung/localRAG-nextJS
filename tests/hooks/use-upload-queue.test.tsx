@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUploadQueue } from '@/hooks/use-upload-queue';
 
 type XhrPlan =
-  | { type: 'load'; status: number; body: unknown }
+  | { type: 'load'; status: number; body?: unknown; response?: unknown; responseText?: string }
   | { type: 'error' }
   | { type: 'abort' };
 
@@ -46,8 +46,8 @@ class MockXMLHttpRequest {
       }
 
       this.status = plan.status;
-      this.response = plan.body;
-      this.responseText = JSON.stringify(plan.body);
+      this.response = plan.response ?? plan.body;
+      this.responseText = plan.responseText ?? JSON.stringify(plan.body ?? {});
       this.onload?.(new ProgressEvent('load'));
     });
   }
@@ -200,5 +200,42 @@ describe('useUploadQueue', () => {
       }),
     );
     expect(MockXMLHttpRequest.sends).toBe(2);
+  });
+
+  it('falls back to a generic upload error when the server returns a non-JSON error body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    MockXMLHttpRequest.reset([
+      {
+        type: 'load',
+        status: 502,
+        response: null,
+        responseText: '<html>Bad gateway</html>',
+      },
+    ]);
+
+    const { result } = renderHook(() => useUploadQueue(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+
+    const file = new File(['content'], 'report.pdf', { type: 'application/pdf' });
+
+    result.current.onFilesSelected([file]);
+
+    await waitFor(() =>
+      expect(result.current.queue[0]).toMatchObject({
+        fileName: 'report.pdf',
+        status: 'error',
+        errorMessage: 'Upload failed.',
+        isRetryable: true,
+      }),
+    );
+    expect(MockXMLHttpRequest.sends).toBe(1);
   });
 });

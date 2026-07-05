@@ -131,7 +131,7 @@ export function useDocuments({
       requestJson<ReindexDocumentResult>(`/api/documents/${id}`, {
         method: 'PATCH',
       }),
-    onSuccess: async () => {
+    onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['documents'] }),
         queryClient.invalidateQueries({ queryKey: ['workflows'] }),

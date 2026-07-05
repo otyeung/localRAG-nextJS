@@ -82,6 +82,70 @@ describe('useDocuments', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflows'] });
   });
 
+  it('invalidates document/workflow queries when re-index returns an error after workflow state may have changed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (typeof input === 'string' && input.startsWith('/api/documents?')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+              page: 1,
+              pageSize: 20,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/workflows') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/documents/document_1' && init?.method === 'PATCH') {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'Document ingestion started, but local state reconciliation is required.',
+            },
+          }),
+          { status: 500, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useDocuments(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    await expect(result.current.reindexDocument.mutateAsync('document_1')).rejects.toThrow(
+      'Document ingestion started, but local state reconciliation is required.',
+    );
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflows'] });
+  });
+
   it('preserves the first workflow for each document when workflows are returned newest-first', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (typeof input === 'string' && input.startsWith('/api/documents?')) {
