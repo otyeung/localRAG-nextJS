@@ -31,6 +31,21 @@ Update:
 Status: DONE
 
 Commits created:
+- 238d3fb fix: fail closed on missing csrf origin
+
+One-line test summary: `pnpm vitest run tests/unit/csrf.test.ts tests/unit/middleware.test.ts tests/unit/api-errors.test.ts` and `pnpm typecheck` passed.
+
+Concerns: None.
+
+Report file path: `.superpowers/sdd/task-2-report.md`
+
+---
+
+Update:
+
+Status: DONE
+
+Commits created:
 - 082f836 fix: harden csrf origin and production csp
 
 One-line test summary: `pnpm vitest run tests/unit/config-env.test.ts tests/unit/api-errors.test.ts tests/unit/rate-limit.test.ts tests/unit/csrf.test.ts tests/unit/middleware.test.ts` and `pnpm typecheck` passed.
