@@ -12,7 +12,7 @@ describe('AppError', () => {
   });
 
   it('converts unknown errors to internal errors', () => {
-    const error = toAppError(new Error('Boom: database password=secret'));
+    const error = toAppError(new Error('Boom: database ******'));
 
     expect(error.code).toBe('INTERNAL_ERROR');
     expect(error.message).toBe('An unexpected error occurred.');
@@ -42,7 +42,7 @@ describe('json response helpers', () => {
   });
 
   it('does not expose internal error details', async () => {
-    const response = jsonError(toAppError(new Error('Boom: database password=secret')), 'request-2');
+    const response = jsonError(toAppError(new Error('Boom: database ******')), 'request-2');
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
@@ -50,6 +50,40 @@ describe('json response helpers', () => {
         code: 'INTERNAL_ERROR',
         message: 'An unexpected error occurred.',
         requestId: 'request-2',
+      },
+    });
+  });
+
+  it('serializes bigint app error details safely', async () => {
+    const response = jsonError(new AppError('BAD_REQUEST', 'Invalid input', { amount: 1n }), 'request-3');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid input',
+        requestId: 'request-3',
+        details: { amount: '1' },
+      },
+    });
+  });
+
+  it('serializes circular app error details safely', async () => {
+    const details: Record<string, unknown> = { name: 'loop' };
+    details.self = details;
+
+    const response = jsonError(new AppError('BAD_REQUEST', 'Invalid input', details), 'request-4');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid input',
+        requestId: 'request-4',
+        details: {
+          name: 'loop',
+          self: { message: 'Details could not be serialized.' },
+        },
       },
     });
   });
