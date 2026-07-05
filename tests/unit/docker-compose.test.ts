@@ -52,6 +52,11 @@ describe('docker compose', () => {
     expect(compose).toContain('WEBHOOK_URL: http://n8n:5678/');
   });
 
+  it('bootstraps workflows server-side without requiring browser activation', () => {
+    expect(compose).toContain('n8n import:workflow --separate --input=/workflows --overwrite');
+    expect(compose).toContain('n8n update:workflow --all --active=true');
+  });
+
   it('keeps n8n and qdrant internal by default', () => {
     expect(compose).not.toContain("'5678:5678'");
     expect(compose).not.toContain("'6333:6333'");
@@ -93,8 +98,10 @@ describe('docker compose', () => {
     expect(exampleEnv).not.toContain('localhost:5678');
   });
 
-  it('documents n8n api key bootstrap as an operator step without browser access instructions', () => {
+  it('documents that api key bootstrap is optional and unsupported through compose cli-only bootstrap', () => {
     expect(n8nReadme).toContain('N8N_API_KEY');
+    expect(n8nReadme).toContain('does not provide a supported CLI or environment-variable path to create n8n API keys');
+    expect(n8nReadme).toContain('leave `N8N_API_KEY` unset');
     expect(n8nReadme).not.toContain('docker-compose.n8n-editor.yml');
     expect(n8nReadme).not.toContain('127.0.0.1:5678:5678');
     expect(n8nReadme).not.toContain('http://localhost:5678');

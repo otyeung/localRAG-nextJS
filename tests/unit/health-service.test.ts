@@ -324,7 +324,8 @@ describe('HealthService', () => {
         expect.objectContaining({
           name: 'n8n',
           status: 'degraded',
-          message: 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.',
+          message:
+            'n8n REST API key is not configured; webhook-only mode is active and API-backed status checks remain unavailable until an administrator provisions a key outside this stack.',
         }),
         expect.objectContaining({
           name: 'openai',
@@ -355,7 +356,8 @@ describe('HealthService', () => {
         expect.objectContaining({
           name: 'n8n',
           status: 'degraded',
-          message: 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.',
+          message:
+            'n8n REST API key is not configured; webhook-only mode is active and API-backed status checks remain unavailable until an administrator provisions a key outside this stack.',
         }),
       ]),
     );

@@ -434,7 +434,7 @@ export class HealthService {
         message: snapshot.healthy
           ? `n8n is healthy with ${snapshot.workflowCount} active workflows.`
           : snapshot.reason === 'missing_api_key' || missingApiKey
-            ? 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.'
+            ? 'n8n REST API key is not configured; webhook-only mode is active and API-backed status checks remain unavailable until an administrator provisions a key outside this stack.'
             : 'n8n API unavailable or workflows could not be listed.',
         checkedAt,
         latencyMs: roundLatency(startedAt),

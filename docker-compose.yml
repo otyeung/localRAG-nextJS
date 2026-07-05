@@ -106,6 +106,7 @@ services:
       - app_data:/data:ro
     command: >
       sh -c "n8n import:workflow --separate --input=/workflows --overwrite &&
+      n8n update:workflow --all --active=true &&
       n8n start"
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:5678/healthz').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
