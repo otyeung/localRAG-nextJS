@@ -1,0 +1,277 @@
+{
+  "id": "workflow-ingestion",
+  "name": "ingestion",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b728ea4a-6f8c-4300-b80d-f5c7956fa001",
+  "nodes": [
+    {
+      "id": "webhook-ingestion",
+      "name": "Webhook Ingestion",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        280
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingestion",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize-request",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.documentId || !payload.uploadId || !payload.filePath) {\n  throw new Error('ingestion requires documentId, uploadId, and filePath');\n}\nreturn [{ json: {\n  documentId: String(payload.documentId),\n  uploadId: String(payload.uploadId),\n  filePath: String(payload.filePath),\n  fileName: String(payload.fileName ?? payload.filePath.split('/').pop() ?? 'document.pdf'),\n  mimeType: String(payload.mimeType ?? 'application/pdf'),\n  requestId: payload.requestId ? String(payload.requestId) : null,\n} }];"
+      }
+    },
+    {
+      "id": "read-file",
+      "name": "Read PDF From Shared Volume",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        700,
+        280
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $json.filePath }}",
+        "binaryPropertyName": "data"
+      }
+    },
+    {
+      "id": "extract-text",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        940,
+        280
+      ],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "destinationOutputField": "extractedText"
+      }
+    },
+    {
+      "id": "chunk-text",
+      "name": "Chunk Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n        extractedText: text,\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
+      }
+    },
+    {
+      "id": "embed-chunk",
+      "name": "Create Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1420,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": $env.OPENAI_MODEL || \"text-embedding-3-small\", \"input\": $json.content}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-embeddings-env",
+          "name": "OpenAI Embeddings (env)"
+        }
+      }
+    },
+    {
+      "id": "build-qdrant-point",
+      "name": "Build Qdrant Point",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $input.item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    extractedText: source.extractedText,\n    vector: embedding,\n  },\n};"
+      }
+    },
+    {
+      "id": "upsert-qdrant",
+      "name": "Upsert Into Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1900,
+        280
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points?wait=true` }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"documentName\":$json.fileName,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
+        "options": {}
+      }
+    },
+    {
+      "id": "summarize-result",
+      "name": "Summarize Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const first = items[0]?.json;\nreturn [{ json: {\n  documentId: first?.documentId ?? null,\n  uploadId: first?.uploadId ?? null,\n  documentName: first?.fileName ?? null,\n  extractedTextLength: String(first?.extractedText ?? '').length,\n  chunkCount: items.length,\n  chunks: items.map((item) => ({\n    id: item.json.pointId,\n    chunkIndex: item.json.chunkIndex,\n    tokenCount: item.json.tokenCount,\n    contentPreview: String(item.json.content).slice(0, 160),\n  })),\n} }];"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        280
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Normalize Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Request": {
+      "main": [
+        [
+          {
+            "node": "Read PDF From Shared Volume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read PDF From Shared Volume": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Chunk Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk Text": {
+      "main": [
+        [
+          {
+            "node": "Create Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Embedding": {
+      "main": [
+        [
+          {
+            "node": "Build Qdrant Point",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Qdrant Point": {
+      "main": [
+        [
+          {
+            "node": "Upsert Into Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Into Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Summarize Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

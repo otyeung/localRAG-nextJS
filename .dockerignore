@@ -1,0 +1,12 @@
+.git
+.gitignore
+.next
+.superpowers
+coverage
+docker-compose.yml
+node_modules
+npm-debug.log
+pnpm-debug.log
+tests
+vitest.config.ts
+playwright.config.ts
