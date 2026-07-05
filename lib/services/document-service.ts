@@ -21,6 +21,18 @@ type ActiveWorkflowSummary = {
   externalExecutionId: string | null;
 };
 
+type ReindexableDocument = {
+  id: string;
+  userId: string;
+  uploadId: string;
+  status: DocumentStatus;
+  title: string;
+  originalFilename: string;
+  mimeType: string;
+  storagePath: string;
+  deletedAt: Date | null;
+};
+
 const ACTIVE_DOCUMENT_WORKFLOW_STATUSES = [WorkflowStatus.QUEUED, WorkflowStatus.RUNNING, WorkflowStatus.WAITING] as const;
 
 export type DocumentDto = {
@@ -203,6 +215,29 @@ export class DocumentService {
     }
 
     await transaction.$executeRawUnsafe('SELECT 1 FROM "Document" WHERE "id" = $1 FOR UPDATE', documentId);
+  }
+
+  private async getLockedReindexableDocument(
+    transaction: DocumentTransactionDb,
+    userId: string,
+    document: ReindexableDocument,
+  ): Promise<ReindexableDocument> {
+    if (typeof transaction.$executeRawUnsafe !== 'function' || typeof transaction.document.findFirst !== 'function') {
+      return document;
+    }
+
+    const lockedDocument = await transaction.document.findFirst({
+      where: {
+        id: document.id,
+        userId,
+      },
+    });
+
+    if (!lockedDocument || lockedDocument.deletedAt) {
+      throw new AppError('NOT_FOUND', 'Document not found.');
+    }
+
+    return lockedDocument as ReindexableDocument;
   }
 
   private async findActiveDocumentWorkflow(
@@ -433,13 +468,13 @@ export class DocumentService {
   }
 
   async requestReindex(userId: string, documentId: string, requestId?: string): Promise<ReindexResult> {
-    const document = await this.db.document.findFirst({
+    const document = (await this.db.document.findFirst({
       where: {
         id: documentId,
         userId,
         deletedAt: null,
       },
-    });
+    })) as ReindexableDocument | null;
 
     if (!document) {
       throw new AppError('NOT_FOUND', 'Document not found.');
@@ -447,22 +482,25 @@ export class DocumentService {
 
     const workflowExecutionId = createResourceId();
 
-    await this.transactionRunner.$transaction(
+    const lockedDocument = await this.transactionRunner.$transaction(
       async (transaction: DocumentTransactionDb) => {
         await this.lockDocumentForReindex(transaction, document.id);
+        const lockedDocument = await this.getLockedReindexableDocument(transaction, userId, document);
 
-        const activeWorkflow = await this.findActiveDocumentWorkflow(transaction, userId, document.id);
+        const activeWorkflow = await this.findActiveDocumentWorkflow(transaction, userId, lockedDocument.id);
         if (activeWorkflow) {
-          throw buildActiveWorkflowConflict(document.id, activeWorkflow);
+          throw buildActiveWorkflowConflict(lockedDocument.id, activeWorkflow);
         }
 
         await this.createQueuedReindexWorkflow(transaction, {
           workflowExecutionId,
           userId,
-          documentId: document.id,
-          uploadId: document.uploadId,
-          previousDocumentStatus: document.status,
+          documentId: lockedDocument.id,
+          uploadId: lockedDocument.uploadId,
+          previousDocumentStatus: lockedDocument.status,
         });
+
+        return lockedDocument;
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -472,11 +510,11 @@ export class DocumentService {
     let startResult: N8nWorkflowStartResult;
     try {
       startResult = await this.ingestionService.startDocumentIngestion({
-        documentId: document.id,
-        uploadId: document.uploadId,
-        filePath: document.storagePath,
-        fileName: document.originalFilename,
-        mimeType: document.mimeType,
+        documentId: lockedDocument.id,
+        uploadId: lockedDocument.uploadId,
+        filePath: lockedDocument.storagePath,
+        fileName: lockedDocument.originalFilename,
+        mimeType: lockedDocument.mimeType,
         requestId,
       });
     } catch (error) {
@@ -503,12 +541,12 @@ export class DocumentService {
               userId,
               action: 'document.reindex_reconciliation_required',
               entityType: 'document',
-              entityId: document.id,
+              entityId: lockedDocument.id,
               requestId,
               metadata: {
                 workflowExecutionId,
                 externalExecutionId: null,
-                uploadId: document.uploadId,
+                uploadId: lockedDocument.uploadId,
                 error: startFailureMessage,
               },
             },
@@ -539,11 +577,11 @@ export class DocumentService {
               userId,
               action: 'document.reindex_start_failed',
               entityType: 'document',
-              entityId: document.id,
+              entityId: lockedDocument.id,
               requestId,
               metadata: {
                 workflowExecutionId,
-                uploadId: document.uploadId,
+                uploadId: lockedDocument.uploadId,
                 error: startFailureMessage,
               },
             },
@@ -570,8 +608,8 @@ export class DocumentService {
       const updatedWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
         const updatedWorkflow = await this.persistAcceptedReindexWorkflow(transaction, {
           workflowExecutionId,
-          documentId: document.id,
-          previousDocumentStatus: document.status,
+          documentId: lockedDocument.id,
+          previousDocumentStatus: lockedDocument.status,
           nextWorkflowStatus,
           startResult,
         });
@@ -581,12 +619,12 @@ export class DocumentService {
             userId,
             action: 'document.reindex_requested',
             entityType: 'document',
-            entityId: document.id,
+            entityId: lockedDocument.id,
             requestId,
             metadata: {
               workflowExecutionId,
               externalExecutionId: startResult.executionId,
-              uploadId: document.uploadId,
+              uploadId: lockedDocument.uploadId,
             },
           },
         });
@@ -604,8 +642,8 @@ export class DocumentService {
       const reconciledWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) =>
         this.persistAcceptedReindexWorkflow(transaction, {
           workflowExecutionId,
-          documentId: document.id,
-          previousDocumentStatus: document.status,
+          documentId: lockedDocument.id,
+          previousDocumentStatus: lockedDocument.status,
           nextWorkflowStatus,
           startResult,
           localPersistenceError,
@@ -618,12 +656,12 @@ export class DocumentService {
             userId,
             action: 'document.reindex_reconciliation_required',
             entityType: 'document',
-            entityId: document.id,
+            entityId: lockedDocument.id,
             requestId,
             metadata: {
               workflowExecutionId,
               externalExecutionId: reconciledWorkflow.externalExecutionId,
-              uploadId: document.uploadId,
+              uploadId: lockedDocument.uploadId,
               error: localPersistenceError,
             },
           },

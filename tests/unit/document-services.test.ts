@@ -1118,6 +1118,78 @@ describe('document services', () => {
     expect(tx.workflowExecution.create).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
+  it('rejects a reindex request when the locked document was deleted after the initial read', async () => {
+    const tx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.DELETED,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: new Date('2026-01-03T00:00:00.000Z'),
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
+    };
+    const db = {
+      workflowExecution: {
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.READY,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const ingestionService = {
+      startDocumentIngestion: vi.fn(),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: ingestionService as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    expect(tx.$executeRawUnsafe).toHaveBeenCalledWith('SELECT 1 FROM "Document" WHERE "id" = $1 FOR UPDATE', 'document_1');
+    expect(tx.document.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'document_1',
+        userId: 'user_1',
+      },
+    });
+    expect(ingestionService.startDocumentIngestion).not.toHaveBeenCalled();
+    expect(tx.workflowExecution.create).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
   it('does not leave unrecoverable initial-state reindex rows when start-failure audit persistence fails', async () => {
     const queueTx = {
       workflowExecution: {
