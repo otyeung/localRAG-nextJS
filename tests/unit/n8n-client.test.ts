@@ -1,11 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+
+const loggerErrorMock = vi.fn();
+const loggerWarnMock = vi.fn();
+
 vi.mock('@/lib/logger/logger', () => ({
   logger: {
     child: () => ({
-      warn: vi.fn(),
-      error: vi.fn(),
+      warn: loggerWarnMock,
+      error: loggerErrorMock,
     }),
   },
 }));
@@ -16,6 +20,11 @@ import { N8nError } from '@/lib/n8n/errors';
 import { N8nWorkflowService } from '@/lib/n8n/workflow';
 
 describe('N8nClient', () => {
+  beforeEach(() => {
+    loggerErrorMock.mockClear();
+    loggerWarnMock.mockClear();
+  });
+
   it('adds API key auth, request id, and retries transient failures', async () => {
     const fetchMock = vi
       .fn()
@@ -93,6 +102,41 @@ describe('N8nClient', () => {
 
     await expect(client.get('/api/v1/health')).rejects.toBeInstanceOf(N8nError);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not log raw upstream response bodies on final failure', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ message: 'secret chunk text' }), {
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: 'secret',
+      timeoutMs: 1000,
+      retryCount: 0,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.get('/api/v1/health', { requestId: 'req_123' })).rejects.toBeInstanceOf(N8nError);
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'GET',
+        path: '/api/v1/health',
+        requestId: 'req_123',
+        status: 502,
+        attempt: 1,
+        circuitOpen: false,
+      }),
+      'n8n request failed.',
+    );
+    expect(JSON.stringify(loggerErrorMock.mock.calls[0][0])).not.toContain('secret chunk text');
+    expect(JSON.stringify(loggerErrorMock.mock.calls[0][0])).not.toContain('body');
   });
 
   it('fetches and combines all active workflow pages', async () => {

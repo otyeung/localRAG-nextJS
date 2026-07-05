@@ -101,7 +101,7 @@ export class N8nClient {
         const retryable = isRetryableError(error);
 
         if (!retryable || attempt === this.options.retryCount) {
-          this.recordFailure(error, input);
+          this.recordFailure(error, input, attempt + 1);
           throw error;
         }
 
@@ -119,22 +119,35 @@ export class N8nClient {
       }
     }
 
-    this.recordFailure(lastError, input);
+    this.recordFailure(lastError, input, this.options.retryCount + 1);
     throw toN8nError(lastError, 'n8n request failed.');
   }
 
-  private recordFailure(error: unknown, input: Pick<N8nRequest<unknown>, 'path' | 'requestId'>): void {
+  private recordFailure(
+    error: unknown,
+    input: Pick<N8nRequest<unknown>, 'method' | 'path' | 'requestId'>,
+    attempt: number,
+  ): void {
     this.consecutiveFailures += 1;
-    if (this.consecutiveFailures >= Math.max(2, this.options.retryCount + 1)) {
+    const circuitThreshold = Math.max(2, this.options.retryCount + 1);
+    if (this.consecutiveFailures >= circuitThreshold) {
       this.circuitOpenUntil = Date.now() + Math.max(1_000, this.options.retryDelayMs * 4);
     }
 
+    const failureDetails =
+      error instanceof N8nError && typeof error.details === 'object' && error.details !== null
+        ? (error.details as { status?: number })
+        : undefined;
+
     this.requestLogger.error(
       {
+        method: input.method,
         path: input.path,
         requestId: input.requestId,
+        attempt,
         consecutiveFailures: this.consecutiveFailures,
-        error,
+        status: failureDetails?.status,
+        circuitOpen: Date.now() < this.circuitOpenUntil,
       },
       'n8n request failed.',
     );
