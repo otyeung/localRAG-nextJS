@@ -56,4 +56,17 @@ describe('SystemStatus', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Unable to load system health.');
   });
+
+  it('shows health unavailable when the route is missing', () => {
+    const health = {
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } satisfies UseHealthResult;
+
+    render(<SystemStatus health={health} />);
+
+    expect(screen.getByText('Health unavailable')).toBeInTheDocument();
+  });
 });

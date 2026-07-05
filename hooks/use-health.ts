@@ -99,15 +99,6 @@ function normalizeErrorMessage(body: unknown) {
 async function requestHealth(): Promise<HealthSnapshot> {
   const response = await fetch('/api/health');
 
-  if (response.status === 404) {
-    return {
-      supported: false,
-      status: 'pending',
-      label: 'Pending Task 9',
-      services: [],
-    };
-  }
-
   const body = (await response.json().catch(() => null)) as unknown;
 
   if (response.status === 503) {

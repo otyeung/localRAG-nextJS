@@ -17,7 +17,7 @@ function toTone(status: string) {
 }
 
 export function SystemStatus({ health }: { health: UseHealthResult }) {
-  const label = health.data?.label ?? (health.isLoading ? 'Checking' : 'Pending Task 9');
+  const label = health.data?.label ?? (health.isLoading ? 'Checking' : 'Health unavailable');
   const tone = health.isError ? 'danger' : toTone(health.data?.status ?? 'neutral');
   const body = health.isError
     ? health.error instanceof Error && health.error.message
@@ -25,9 +25,7 @@ export function SystemStatus({ health }: { health: UseHealthResult }) {
       : 'Unable to load system health.'
     : health.isLoading
       ? 'Checking the /api/health endpoint for the latest system status.'
-      : health.data?.supported === false
-        ? 'The health route is expected in Task 9. This placeholder is already wired to consume it when available.'
-        : 'The health endpoint responded without per-service details.';
+      : 'The health endpoint responded without per-service details.';
 
   return (
     <section className="rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-5 shadow-[var(--shadow-panel)]">

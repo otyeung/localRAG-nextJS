@@ -83,7 +83,7 @@ export function AppShell() {
     }
   };
 
-  let healthLabel = health.data?.label ?? (health.isLoading ? 'Checking' : 'Pending Task 9');
+  let healthLabel = health.data?.label ?? (health.isLoading ? 'Checking' : 'Health unavailable');
   let healthTone: HealthTone =
     health.data?.status === 'healthy'
       ? 'success'

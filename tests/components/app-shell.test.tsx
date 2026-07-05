@@ -109,14 +109,9 @@ describe('AppShell health states', () => {
     expect(screen.getByText('Gateway timeout while reading health checks.')).toBeInTheDocument();
   });
 
-  it('keeps the Task 9 placeholder copy for a missing health route', () => {
+  it('shows health unavailable for a missing health route', () => {
     useHealthMock.mockReturnValue({
-      data: {
-        supported: false,
-        status: 'pending',
-        label: 'Pending Task 9',
-        services: [],
-      },
+      data: undefined,
       isLoading: false,
       isError: false,
       error: null,
@@ -124,7 +119,6 @@ describe('AppShell health states', () => {
 
     render(<AppShell />);
 
-    expect(screen.getAllByText('Pending Task 9').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('The health route is expected in Task 9. This placeholder is already wired to consume it when available.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Health unavailable').length).toBeGreaterThan(0);
   });
 });

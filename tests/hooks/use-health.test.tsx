@@ -102,4 +102,20 @@ describe('useHealth', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('Health response was malformed.');
   });
+
+  it('surfaces a 404 response as an error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Not Found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const { result } = renderHook(() => useHealth(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error?.message).toBe('Not Found');
+  });
 });
