@@ -25,7 +25,7 @@
 - The corpus questions from the spec must pass through streaming chat with citations.
 - Validate with `pnpm build`, type checking, ESLint, unit tests, integration tests, Playwright tests, and Docker local startup.
 - Include the commit trailer on implementation commits: `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
-- When implementation is complete, create or verify a public GitHub repository named `localRAG-nextJS`, use the Apache License 2.0, commit all final changes, push to the remote, start the local development server, and leave it running for user testing.
+- When implementation is complete, create or verify a public GitHub repository named `localRAG-nextJS`, use the Apache License 2.0, commit all final changes, push to the remote, merge the feature branch into the default branch, push the merge, clean up any linked worktree/feature branch state that is safe to remove, start the local development server, and leave it running for user testing.
 
 ---
 
@@ -2073,7 +2073,8 @@ Expected: clean working tree. If generated artifacts such as logs or temp upload
 **Interfaces:**
 - Produces public GitHub repository `localRAG-nextJS`.
 - Produces configured `origin` remote.
-- Produces a pushed default branch.
+- Produces a pushed and merged default branch.
+- Cleans up safe feature branch/worktree state.
 - Produces a running local development server for user testing.
 
 - [ ] **Step 1: Verify `.gitignore` excludes generated and secret files**
@@ -2147,7 +2148,38 @@ git push -u origin "$CURRENT_BRANCH"
 
 Expected: branch is pushed to GitHub successfully.
 
-- [ ] **Step 6: Start the local development server for user testing**
+- [ ] **Step 6: Merge into the default branch and push**
+
+Run:
+
+```bash
+CURRENT_BRANCH="$(git branch --show-current)"
+git switch main
+git merge --no-ff "$CURRENT_BRANCH" -m "merge: enterprise rag foundation"
+git push -u origin main
+```
+
+Expected: the completed implementation is merged into `main` and pushed to GitHub.
+
+- [ ] **Step 7: Clean up safe worktree and feature branch state**
+
+If implementation used a linked worktree, remove only that completed linked worktree after confirming no uncommitted work remains:
+
+```bash
+git worktree list
+git worktree remove <completed-worktree-path>
+```
+
+If implementation ran in the primary checkout, do not remove the current directory. After the merge is pushed and no uncommitted work remains, remove the merged local feature branch only when not currently checked out:
+
+```bash
+git branch --merged main
+git branch -d "$CURRENT_BRANCH"
+```
+
+Expected: no completed linked worktree remains. The primary checkout stays intact for local testing.
+
+- [ ] **Step 8: Start the local development server for user testing**
 
 Run:
 

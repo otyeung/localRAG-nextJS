@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --app-bg: #edf2f7;
+  --panel-elevated: rgba(255, 255, 255, 0.78);
+  --panel-subtle: rgba(255, 255, 255, 0.52);
+  --accent-surface: rgba(15, 23, 42, 0.05);
+  --code-surface: rgba(15, 23, 42, 0.06);
+  --border-soft: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text-strong: #07111f;
+  --text-muted: rgba(7, 17, 31, 0.76);
+  --text-dim: rgba(7, 17, 31, 0.5);
+  --accent: #0f6cda;
+  --accent-soft: rgba(15, 108, 218, 0.18);
+  --accent-foreground: #eff7ff;
+  --shadow-panel: 0 24px 70px rgba(15, 23, 42, 0.09);
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: #08111e;
+  --panel-elevated: rgba(9, 18, 30, 0.78);
+  --panel-subtle: rgba(255, 255, 255, 0.04);
+  --accent-surface: rgba(59, 130, 246, 0.08);
+  --code-surface: rgba(255, 255, 255, 0.04);
+  --border-soft: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-strong: #f5f7fb;
+  --text-muted: rgba(245, 247, 251, 0.74);
+  --text-dim: rgba(245, 247, 251, 0.45);
+  --accent: #59a6ff;
+  --accent-soft: rgba(89, 166, 255, 0.2);
+  --accent-foreground: #04111f;
+  --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.35);
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(89, 166, 255, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.14), transparent 26%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 24%),
+    var(--app-bg);
+  color: var(--text-strong);
+  font-family: var(--font-body), sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.font-display {
+  font-family: var(--font-display), serif;
+}
+
+.glass-panel {
+  border-radius: 2rem;
+  border: 1px solid var(--border-soft);
+  background: var(--panel-elevated);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--shadow-panel);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.38);
+  border: 2px solid transparent;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+}

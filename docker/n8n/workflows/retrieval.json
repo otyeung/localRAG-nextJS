@@ -1,0 +1,226 @@
+{
+  "id": "workflow-retrieval",
+  "name": "retrieval",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0354b2ef-a91b-42d8-9668-b2322feeff45",
+  "nodes": [
+    {
+      "id": "webhook-retrieval",
+      "name": "Webhook Retrieval",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        280
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retrieval",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "validate-webhook-secret-retrieval",
+      "name": "Validate Webhook Secret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const [item] = items;\nconst headers = item.json.headers && typeof item.json.headers === 'object' ? item.json.headers : {};\nconst normalizedHeaders = Object.fromEntries(Object.entries(headers).map(([key, value]) => [String(key).toLowerCase(), value]));\nconst expectedSecret = $env.N8N_WEBHOOK_SECRET;\nconst providedSecret = normalizedHeaders['x-n8n-webhook-secret'];\nif (!expectedSecret) {\n  throw new Error('N8N_WEBHOOK_SECRET is not configured');\n}\nif (String(providedSecret ?? '') !== String(expectedSecret)) {\n  throw new Error('invalid webhook secret');\n}\nreturn items;"
+      }
+    },
+    {
+      "id": "normalize-query",
+      "name": "Normalize Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.query) {\n  throw new Error('retrieval requires query text');\n}\nreturn [{ json: {\n  query: String(payload.query),\n  conversationId: payload.conversationId ? String(payload.conversationId) : null,\n  documentIds: Array.isArray(payload.documentIds) ? payload.documentIds.map((value) => String(value)) : [],\n  topK: Number.isFinite(Number(payload.topK)) ? Math.max(1, Math.min(20, Number(payload.topK))) : 5,\n  requestId: payload.requestId ? String(payload.requestId) : null,\n} }];"
+      }
+    },
+    {
+      "id": "embed-query",
+      "name": "Embed Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": $env.OPENAI_EMBEDDING_MODEL || \"text-embedding-3-small\", \"input\": $json.query}",
+        "options": {},
+        "sendHeaders": true,
+        "headerParametersUi": {
+          "headerParameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-search-body",
+      "name": "Build Search Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const embedding = items[0]?.json?.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a query vector');\n}\nconst input = $('Normalize Query').first().json;\nconst filter = input.documentIds.length === 0\n  ? undefined\n  : { must: [{ key: 'documentId', match: { any: input.documentIds } }] };\nreturn [{ json: {\n  query: input.query,\n  conversationId: input.conversationId,\n  documentIds: input.documentIds,\n  topK: input.topK,\n  requestId: input.requestId,\n  searchBody: {\n    vector: embedding,\n    limit: input.topK,\n    with_payload: true,\n    score_threshold: 0,\n    filter,\n  },\n} }];"
+      }
+    },
+    {
+      "id": "search-qdrant",
+      "name": "Search Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points/search` }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.searchBody }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize-chunks",
+      "name": "Normalize Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const request = $('Build Search Body').first().json;\nconst response = items[0]?.json;\nconst results = Array.isArray(response?.result) ? response.result : [];\nreturn [{ json: {\n  query: request.query,\n  conversationId: request.conversationId,\n  documentIds: request.documentIds,\n  topK: request.topK,\n  requestId: request.requestId,\n  chunks: results.map((match, index) => ({\n    id: String(match.id ?? `${index}`),\n    documentId: String(match.payload?.documentId ?? ''),\n    documentName: String(match.payload?.documentName ?? match.payload?.fileName ?? 'Unknown document'),\n    chunkIndex: Number(match.payload?.chunkIndex ?? 0),\n    content: String(match.payload?.content ?? ''),\n    score: Number(match.score ?? 0),\n    metadata: {\n      tokenCount: match.payload?.tokenCount ?? null,\n      source: 'qdrant',\n    },\n  })),\n} }];"
+      }
+    },
+    {
+      "id": "respond-retrieval",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1660,
+        280
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Retrieval": {
+      "main": [
+        [
+          {
+            "node": "Validate Webhook Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Query": {
+      "main": [
+        [
+          {
+            "node": "Embed Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Build Search Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Body": {
+      "main": [
+        [
+          {
+            "node": "Search Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Normalize Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Chunks": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Webhook Secret": {
+      "main": [
+        [
+          {
+            "node": "Normalize Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

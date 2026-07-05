@@ -1,0 +1,301 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserKind {
+  ANONYMOUS
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum MessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  TOOL
+}
+
+enum UploadStatus {
+  PENDING
+  VALIDATING
+  INGESTING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum DocumentStatus {
+  PENDING
+  INGESTING
+  READY
+  FAILED
+  DELETED
+}
+
+enum WorkflowStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  ERROR
+  CANCELED
+  WAITING
+}
+
+enum AgentRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum ToolCallStatus {
+  STARTED
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id              String              @id @default(cuid())
+  kind            UserKind            @default(ANONYMOUS)
+  fingerprintHash String              @unique
+  displayName     String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  conversations   Conversation[]
+  documents       Document[]
+  uploads         Upload[]
+  workflows       WorkflowExecution[]
+  auditLogs       AuditLog[]
+  settings        Settings?
+
+  @@index([createdAt])
+}
+
+model Conversation {
+  id         String             @id @default(cuid())
+  userId     String
+  title      String             @default("New Chat")
+  status     ConversationStatus @default(ACTIVE)
+  metadata   Json?
+  searchText String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  deletedAt  DateTime?
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages   Message[]
+  agentRuns  AgentRun[]
+
+  @@index([userId, status, updatedAt])
+  @@index([searchText])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  citations      Json?
+  toolCalls      Json?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  attachments    Attachment[]
+
+  @@index([conversationId, createdAt])
+}
+
+model Attachment {
+  id            String   @id @default(cuid())
+  messageId     String
+  fileName      String
+  mimeType      String
+  fileSizeBytes Int
+  storagePath   String
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  message       Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+model Upload {
+  id               String              @id @default(cuid())
+  userId           String
+  status           UploadStatus        @default(PENDING)
+  originalFilename String
+  mimeType         String
+  fileSizeBytes    Int
+  fileHash         String
+  storagePath      String
+  errorMessage     String?
+  metadata         Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents        Document[]
+  workflows        WorkflowExecution[]
+
+  @@index([userId, status, createdAt])
+  @@index([fileHash])
+}
+
+model Document {
+  id               String              @id @default(cuid())
+  userId           String
+  uploadId         String
+  status           DocumentStatus      @default(PENDING)
+  title            String
+  originalFilename String
+  mimeType         String
+  fileSizeBytes    Int
+  fileHash         String
+  storagePath      String
+  extractedText    String?
+  searchText       String?
+  metadata         Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  deletedAt        DateTime?
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  upload           Upload              @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  chunks           ChunkMetadata[]
+  embeddings       EmbeddingMetadata[]
+  workflows        WorkflowExecution[]
+
+  @@index([userId, status, createdAt])
+  @@index([uploadId])
+  @@index([fileHash])
+  @@index([searchText])
+}
+
+model ChunkMetadata {
+  id         String   @id @default(cuid())
+  documentId String
+  chunkIndex Int
+  content    String
+  tokenCount Int?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
+
+model EmbeddingMetadata {
+  id             String   @id @default(cuid())
+  documentId     String
+  chunkId        String?
+  vectorStoreId  String?
+  embeddingModel String?
+  dimensions     Int?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  document       Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([vectorStoreId])
+}
+
+model WorkflowExecution {
+  id                  String         @id @default(cuid())
+  userId              String
+  documentId          String?
+  uploadId            String?
+  workflowKey         String
+  status              WorkflowStatus @default(QUEUED)
+  externalExecutionId String?
+  requestPayload      Json?
+  responsePayload     Json?
+  metadata            Json?
+  errorMessage        String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document            Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  upload              Upload?        @relation(fields: [uploadId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([workflowKey])
+  @@index([externalExecutionId])
+  @@index([documentId])
+  @@index([uploadId])
+}
+
+model AgentRun {
+  id             String         @id @default(cuid())
+  conversationId String
+  status         AgentRunStatus @default(RUNNING)
+  model          String?
+  provider       String?
+  metadata       Json?
+  startedAt      DateTime       @default(now())
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  toolCalls      ToolCall[]
+
+  @@index([conversationId, createdAt])
+  @@index([status])
+}
+
+model ToolCall {
+  id           String         @id @default(cuid())
+  agentRunId   String
+  name         String
+  status       ToolCallStatus @default(STARTED)
+  arguments    Json?
+  result       Json?
+  errorMessage String?
+  metadata     Json?
+  startedAt    DateTime       @default(now())
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  agentRun     AgentRun       @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+
+  @@index([agentRunId, status, createdAt])
+  @@index([name])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String?
+  requestId  String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([requestId])
+}
+
+model Settings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  theme                 String   @default("system")
+  model                 String   @default("gpt-4.1-mini")
+  showReasoningMetadata Boolean  @default(true)
+  metadata              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
