@@ -2,10 +2,18 @@ import 'server-only';
 
 import pino from 'pino';
 
-import { env } from '@/lib/config/env';
+const validLogLevels = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const);
+
+type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+
+function readLogLevel(): LogLevel {
+  const value = process.env.LOG_LEVEL?.trim().toLowerCase();
+
+  return value && validLogLevels.has(value as LogLevel) ? (value as LogLevel) : 'info';
+}
 
 export const logger = pino({
-  level: env.logger.level,
+  level: readLogLevel(),
   transport:
     process.env.NODE_ENV === 'development'
       ? {
