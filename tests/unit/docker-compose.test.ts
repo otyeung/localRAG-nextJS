@@ -35,11 +35,18 @@ describe('docker compose', () => {
     expect(compose).toContain('QDRANT_URL=http://qdrant:6333');
   });
 
+  it('keeps n8n and qdrant internal by default', () => {
+    expect(compose).not.toContain("'5678:5678'");
+    expect(compose).not.toContain("'6333:6333'");
+  });
+
   it('bootstraps the Qdrant collection before application services start', () => {
     expect(compose).toContain('qdrant-init:');
     expect(compose).toContain('service_completed_successfully');
     expect(compose).toContain('QDRANT_VECTOR_SIZE');
     expect(compose).toContain('QDRANT_DISTANCE');
+    expect(compose).toContain('OPENAI_EMBEDDING_MODEL');
+    expect(compose).toContain('N8N_WEBHOOK_SECRET');
   });
 
   it('marks imported n8n workflows as active for production webhook registration', () => {
@@ -52,6 +59,8 @@ describe('docker compose', () => {
     const buildPointCode = String(buildPointNode.parameters?.jsCode ?? '');
     const upsertNode = getNode(ingestionWorkflow, 'Upsert Into Qdrant');
     const upsertBody = String(upsertNode.parameters?.jsonBody ?? '');
+    const embedNode = getNode(ingestionWorkflow, 'Create Embedding');
+    const embedBody = String(embedNode.parameters?.jsonBody ?? '');
 
     expect(buildPointCode).toContain("$('Chunk Text').item.json");
     expect(buildPointCode).toContain('uploadId');
@@ -60,6 +69,7 @@ describe('docker compose', () => {
     expect(buildPointCode).toContain('content');
     expect(upsertBody).toContain('"uploadId":$json.uploadId');
     expect(upsertBody).toContain('"fileName":$json.fileName');
+    expect(embedBody).toContain('OPENAI_EMBEDDING_MODEL');
   });
 
   it('preserves retrieval metadata after embedding when building the Qdrant search request', () => {
@@ -67,6 +77,8 @@ describe('docker compose', () => {
     const buildSearchCode = String(buildSearchNode.parameters?.jsCode ?? '');
     const normalizeChunksNode = getNode(retrievalWorkflow, 'Normalize Chunks');
     const normalizeChunksCode = String(normalizeChunksNode.parameters?.jsCode ?? '');
+    const embedNode = getNode(retrievalWorkflow, 'Embed Query');
+    const embedBody = String(embedNode.parameters?.jsonBody ?? '');
 
     expect(buildSearchCode).toContain("$('Normalize Query').first().json");
     expect(buildSearchCode).toContain('documentIds');
@@ -75,5 +87,18 @@ describe('docker compose', () => {
     expect(normalizeChunksCode).toContain('conversationId');
     expect(normalizeChunksCode).toContain('documentIds');
     expect(normalizeChunksCode).toContain('topK');
+    expect(embedBody).toContain('OPENAI_EMBEDDING_MODEL');
+  });
+
+  it('validates the internal webhook secret before workflow logic executes', () => {
+    const ingestionValidationNode = getNode(ingestionWorkflow, 'Validate Webhook Secret');
+    const retrievalValidationNode = getNode(retrievalWorkflow, 'Validate Webhook Secret');
+    const ingestionValidationCode = String(ingestionValidationNode.parameters?.jsCode ?? '');
+    const retrievalValidationCode = String(retrievalValidationNode.parameters?.jsCode ?? '');
+
+    expect(ingestionValidationCode).toContain('x-n8n-webhook-secret');
+    expect(ingestionValidationCode).toContain('N8N_WEBHOOK_SECRET');
+    expect(retrievalValidationCode).toContain('x-n8n-webhook-secret');
+    expect(retrievalValidationCode).toContain('N8N_WEBHOOK_SECRET');
   });
 });

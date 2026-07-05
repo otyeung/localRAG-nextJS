@@ -9,9 +9,11 @@ describe('createEnv', () => {
     const env = createEnv({
       OPENAI_API_KEY: 'sk-test',
       OPENAI_MODEL: 'gpt-4.1-mini',
+      OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
       DATABASE_URL: 'postgresql://localhost:5432/db',
       N8N_BASE_URL: 'http://n8n:5678',
       N8N_API_KEY: 'n8n-test',
+      N8N_WEBHOOK_SECRET: 'webhook-secret',
       N8N_TIMEOUT: '30000',
       N8N_RETRY_COUNT: '3',
       N8N_RETRY_DELAY: '500',
@@ -26,9 +28,11 @@ describe('createEnv', () => {
     });
 
     expect(env.n8n.timeoutMs).toBe(30_000);
+    expect(env.n8n.webhookSecret).toBe('webhook-secret');
     expect(env.upload.maxBytes).toBe(52_428_800);
     expect(env.qdrant.collection).toBe('documents');
     expect(env.auth.anonymousCookieSecret).toBe('test-anonymous-cookie-secret');
+    expect(env.openai.embeddingModel).toBe('text-embedding-3-small');
   });
 
   it('rejects invalid URLs and numeric values', () => {
@@ -36,9 +40,11 @@ describe('createEnv', () => {
       createEnv({
         OPENAI_API_KEY: 'sk-test',
         OPENAI_MODEL: 'gpt-4.1-mini',
+        OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
         DATABASE_URL: 'not-a-url',
         N8N_BASE_URL: 'http://n8n:5678',
         N8N_API_KEY: 'n8n-test',
+        N8N_WEBHOOK_SECRET: '',
         N8N_TIMEOUT: '-1',
         N8N_RETRY_COUNT: '3',
         N8N_RETRY_DELAY: '500',

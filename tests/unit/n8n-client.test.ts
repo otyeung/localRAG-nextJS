@@ -44,6 +44,7 @@ describe('N8nClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].headers['X-N8N-API-KEY']).toBe('secret');
     expect(fetchMock.mock.calls[0][1].headers['x-request-id']).toBe('req_123');
+    expect(fetchMock.mock.calls[0][1].headers['x-n8n-webhook-secret']).toBeUndefined();
   });
 
   it('preserves base path prefixes when resolving request urls', async () => {
@@ -230,5 +231,28 @@ describe('N8nClient', () => {
       requestId: undefined,
       schema: expect.any(Object),
     });
+  });
+
+  it('adds the internal webhook secret header for workflow webhook requests only', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: 'secret',
+      webhookSecret: 'internal-secret',
+      timeoutMs: 1000,
+      retryCount: 0,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.post('/webhook/retrieval', { body: { query: 'hello' } })).resolves.toEqual({ ok: true });
+    await expect(client.get('/api/v1/health')).resolves.toEqual({ ok: true });
+
+    expect(fetchMock.mock.calls[0][1].headers['x-n8n-webhook-secret']).toBe('internal-secret');
+    expect(fetchMock.mock.calls[1][1].headers['x-n8n-webhook-secret']).toBeUndefined();
   });
 });

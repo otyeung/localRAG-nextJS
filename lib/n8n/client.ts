@@ -16,6 +16,7 @@ export type N8nClientOptions = {
   baseUrl: string;
   apiKey: string;
   bearerToken?: string;
+  webhookSecret?: string;
   timeoutMs: number;
   retryCount: number;
   retryDelayMs: number;
@@ -62,6 +63,10 @@ function isRetryableError(error: unknown): boolean {
   }
 
   return typeof details.status === 'number' ? isRetryableStatus(details.status) : false;
+}
+
+function isWebhookPath(path: string): boolean {
+  return path === '/webhook' || path.startsWith('/webhook/') || path === 'webhook' || path.startsWith('webhook/');
 }
 
 export class N8nClient {
@@ -166,6 +171,7 @@ export class N8nClient {
     const headers = createN8nHeaders({
       apiKey: this.options.apiKey,
       bearerToken: this.options.bearerToken,
+      webhookSecret: isWebhookPath(input.path) ? this.options.webhookSecret : undefined,
       requestId: input.requestId,
       headers: input.headers,
       withJsonContentType: input.body !== undefined,
@@ -247,6 +253,7 @@ export function createN8nClient(options: Partial<N8nClientOptions> = {}): N8nCli
     baseUrl: options.baseUrl ?? env.n8n.baseUrl,
     apiKey: options.apiKey ?? env.n8n.apiKey,
     bearerToken: options.bearerToken,
+    webhookSecret: options.webhookSecret ?? env.n8n.webhookSecret,
     timeoutMs: options.timeoutMs ?? env.n8n.timeoutMs,
     retryCount: options.retryCount ?? env.n8n.retryCount,
     retryDelayMs: options.retryDelayMs ?? env.n8n.retryDelayMs,

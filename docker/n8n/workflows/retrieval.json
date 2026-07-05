@@ -24,6 +24,20 @@
       }
     },
     {
+      "id": "validate-webhook-secret-retrieval",
+      "name": "Validate Webhook Secret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const [item] = items;\nconst headers = item.json.headers && typeof item.json.headers === 'object' ? item.json.headers : {};\nconst normalizedHeaders = Object.fromEntries(Object.entries(headers).map(([key, value]) => [String(key).toLowerCase(), value]));\nconst expectedSecret = $env.N8N_WEBHOOK_SECRET;\nconst providedSecret = normalizedHeaders['x-n8n-webhook-secret'];\nif (!expectedSecret) {\n  throw new Error('N8N_WEBHOOK_SECRET is not configured');\n}\nif (String(providedSecret ?? '') !== String(expectedSecret)) {\n  throw new Error('invalid webhook secret');\n}\nreturn items;"
+      }
+    },
+    {
       "id": "normalize-query",
       "name": "Normalize Query",
       "type": "n8n-nodes-base.code",
@@ -53,7 +67,7 @@
         "nodeCredentialType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"model\": $env.OPENAI_MODEL || \"text-embedding-3-small\", \"input\": $json.query}",
+        "jsonBody": "={\"model\": $env.OPENAI_EMBEDDING_MODEL || \"text-embedding-3-small\", \"input\": $json.query}",
         "options": {}
       },
       "credentials": {
@@ -129,7 +143,7 @@
       "main": [
         [
           {
-            "node": "Normalize Query",
+            "node": "Validate Webhook Secret",
             "type": "main",
             "index": 0
           }
@@ -185,6 +199,17 @@
         [
           {
             "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Webhook Secret": {
+      "main": [
+        [
+          {
+            "node": "Normalize Query",
             "type": "main",
             "index": 0
           }
