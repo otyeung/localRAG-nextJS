@@ -64,10 +64,12 @@ export function MessageList({
   messages,
   onCopy,
   onRetry,
+  showReasoningMetadata = true,
 }: {
   messages: ChatMessage[];
   onCopy: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
+  showReasoningMetadata?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -195,7 +197,7 @@ export function MessageList({
               </section>
             ) : null}
 
-            {reasoningParts.length > 0 ? (
+            {showReasoningMetadata && reasoningParts.length > 0 ? (
               <details className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
                 <summary className="cursor-pointer text-sm font-medium text-[color:var(--text-strong)]">
                   Reasoning metadata

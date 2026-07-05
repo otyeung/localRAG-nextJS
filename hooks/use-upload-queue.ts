@@ -72,6 +72,10 @@ function validateFile(file: File): string | null {
     return 'Unsupported file type.';
   }
 
+  if (!file.type) {
+    return 'MIME type is required.';
+  }
+
   if (file.type && file.type !== expectedMimeType) {
     return 'File extension does not match MIME type.';
   }

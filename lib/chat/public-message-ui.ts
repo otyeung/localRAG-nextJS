@@ -11,11 +11,21 @@ export type PublicMessageRecord = {
   content: string;
   citations: unknown;
   toolCalls: unknown;
+  metadata?: PublicMessageMetadata | null;
   createdAt: string;
   updatedAt: string;
 };
 
+export type PublicMessageMetadata = {
+  model?: string;
+  agent?: string;
+  activeAgentName?: string;
+};
+
 export type ChatUiMessage = UIMessage<{
+  model?: string;
+  agent?: string;
+  activeAgentName?: string;
   createdAt?: string;
 }>;
 
@@ -55,8 +65,32 @@ function toCitationParts(citations: unknown): ChatUiMessage['parts'] {
   });
 }
 
+export function sanitizePublicMessageMetadata(metadata: unknown): PublicMessageMetadata | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const record = metadata as Record<string, unknown>;
+  const safeMetadata: PublicMessageMetadata = {};
+
+  if (typeof record.model === 'string' && record.model.trim().length > 0) {
+    safeMetadata.model = record.model;
+  }
+
+  if (typeof record.agent === 'string' && record.agent.trim().length > 0) {
+    safeMetadata.agent = record.agent;
+  }
+
+  if (typeof record.activeAgentName === 'string' && record.activeAgentName.trim().length > 0) {
+    safeMetadata.activeAgentName = record.activeAgentName;
+  }
+
+  return Object.keys(safeMetadata).length > 0 ? safeMetadata : null;
+}
+
 export function toChatUiMessage(message: PublicMessageRecord): ChatUiMessage {
   const parts: ChatUiMessage['parts'] = [];
+  const safeMetadata = sanitizePublicMessageMetadata(message.metadata);
 
   if (message.content.trim().length > 0) {
     parts.push({
@@ -72,6 +106,7 @@ export function toChatUiMessage(message: PublicMessageRecord): ChatUiMessage {
     role: normalizeRole(message.role),
     parts,
     metadata: {
+      ...(safeMetadata ?? {}),
       createdAt: message.createdAt,
     },
   };

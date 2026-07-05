@@ -3,16 +3,13 @@
 import { useEffect } from 'react';
 import { useTheme } from 'next-themes';
 import { useForm } from 'react-hook-form';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Save } from 'lucide-react';
 
 import { StatusBadge } from '@/components/common/status-badge';
+import { useUserSettings, type UserSettings } from '@/hooks/use-user-settings';
 
-type SettingsForm = {
-  theme: 'system' | 'light' | 'dark';
-  model: string;
-  showReasoningMetadata: boolean;
-};
+type SettingsForm = UserSettings;
 
 type ApiResponse<T> = { data: T };
 
@@ -41,10 +38,7 @@ export function SettingsPanel() {
     },
   });
 
-  const settingsQuery = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => requestJson<SettingsForm>('/api/settings'),
-  });
+  const settingsQuery = useUserSettings();
 
   useEffect(() => {
     if (settingsQuery.data) {

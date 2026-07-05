@@ -50,6 +50,11 @@ describe('useConversationMessages', () => {
                   },
                 ],
                 toolCalls: null,
+                metadata: {
+                  activeAgentName: 'Knowledge agent',
+                  model: 'gpt-4.1-mini',
+                  requestId: 'req_hidden',
+                },
                 createdAt: '2026-01-01T00:00:30.000Z',
                 updatedAt: '2026-01-01T00:00:30.000Z',
               },
@@ -85,7 +90,11 @@ describe('useConversationMessages', () => {
           { type: 'text', text: 'Transcript restored.' },
           { type: 'source-document', sourceId: 'document_1', mediaType: 'text/plain', title: 'Quarterly Report' },
         ],
-        metadata: { createdAt: '2026-01-01T00:00:30.000Z' },
+        metadata: {
+          createdAt: '2026-01-01T00:00:30.000Z',
+          activeAgentName: 'Knowledge agent',
+          model: 'gpt-4.1-mini',
+        },
       },
     ]);
   });

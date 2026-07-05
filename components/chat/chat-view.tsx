@@ -9,6 +9,7 @@ import { MessageComposer } from '@/components/chat/message-composer';
 import { MessageList } from '@/components/chat/message-list';
 import { StatusBadge } from '@/components/common/status-badge';
 import { useConversationMessages } from '@/hooks/use-conversation-messages';
+import { useUserSettings } from '@/hooks/use-user-settings';
 
 type ChatMessage = UIMessage<{
   model?: string;
@@ -57,9 +58,15 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
     transport,
   });
   const conversationMessages = useConversationMessages(initialConversationId);
+  const userSettings = useUserSettings();
 
   const latestAssistant = useMemo(() => getLatestAssistant(messages), [messages]);
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const canRetryLatest = useMemo(
+    () => !isStreaming && messages.some((message) => message.role === 'assistant' || message.role === 'user'),
+    [isStreaming, messages],
+  );
+  const showReasoningMetadata = userSettings.data?.showReasoningMetadata ?? true;
 
   useEffect(() => {
     pendingHydrationConversationIdRef.current = initialConversationId;
@@ -135,6 +142,22 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
     await navigator.clipboard?.writeText(content);
   };
 
+  const retryLatest = async () => {
+    if (!canRetryLatest) {
+      return;
+    }
+
+    await regenerate();
+  };
+
+  const retryMessage = async (message: ChatMessage) => {
+    if (message.role !== 'assistant' || isStreaming) {
+      return;
+    }
+
+    await regenerate({ messageId: message.id });
+  };
+
   return (
     <section className="glass-panel flex h-full min-h-[70vh] flex-col overflow-hidden">
       <header className="border-b border-[color:var(--border-soft)] px-6 py-5">
@@ -155,8 +178,9 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-sm text-[color:var(--text-muted)] transition hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-strong)]"
-              onClick={() => regenerate()}
+              disabled={!canRetryLatest}
+              className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-sm text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => void retryLatest()}
             >
               <Sparkles className="h-4 w-4" />
               Retry latest response
@@ -197,7 +221,8 @@ export function ChatView({ initialConversationId }: { initialConversationId: str
           <MessageList
             messages={messages}
             onCopy={copyMessage}
-            onRetry={(message) => regenerate({ messageId: message.id })}
+            onRetry={retryMessage}
+            showReasoningMetadata={showReasoningMetadata}
           />
         ) : initialConversationId && conversationMessages.isLoading ? (
           <div className="flex h-full min-h-[22rem] items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center text-sm text-[color:var(--text-muted)]">

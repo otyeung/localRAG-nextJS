@@ -1,11 +1,12 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'ai';
 
 const useChatMock = vi.hoisted(() => vi.fn());
 const useConversationMessagesMock = vi.hoisted(() => vi.fn());
+const useUserSettingsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: useChatMock,
@@ -13,6 +14,10 @@ vi.mock('@ai-sdk/react', () => ({
 
 vi.mock('@/hooks/use-conversation-messages', () => ({
   useConversationMessages: useConversationMessagesMock,
+}));
+
+vi.mock('@/hooks/use-user-settings', () => ({
+  useUserSettings: useUserSettingsMock,
 }));
 
 import { ChatView } from '@/components/chat/chat-view';
@@ -39,6 +44,10 @@ const messages: UIMessage[] = [
 ];
 
 describe('ChatView', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     useChatMock.mockReset();
     useConversationMessagesMock.mockReset();
@@ -58,6 +67,13 @@ describe('ChatView', () => {
       isSuccess: true,
       error: null,
     });
+    useUserSettingsMock.mockReturnValue({
+      data: {
+        theme: 'system',
+        model: 'gpt-4.1-mini',
+        showReasoningMetadata: true,
+      },
+    });
   });
 
   it('renders the message composer and core chat actions', () => {
@@ -67,6 +83,23 @@ describe('ChatView', () => {
     expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop generation' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry response' })).toBeInTheDocument();
+  });
+
+  it('disables retry latest response when no transcript is available', () => {
+    useChatMock.mockReturnValue({
+      messages: [],
+      setMessages: vi.fn(),
+      sendMessage: vi.fn(),
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    });
+
+    render(createElement(ChatView, { initialConversationId: null }));
+
+    expect(screen.getByRole('button', { name: 'Retry latest response' })).toBeDisabled();
   });
 
   it('renders assistant metadata, markdown tables, and citations', () => {
@@ -223,5 +256,20 @@ describe('ChatView', () => {
     expect(screen.getByLabelText('Tool retrieve chunks completed')).toBeInTheDocument();
     expect(screen.getByLabelText('Tool search documents failed')).toBeInTheDocument();
     expect(screen.queryByText('ignored')).not.toBeInTheDocument();
+  });
+
+  it('hides reasoning metadata when user settings disable it', () => {
+    useUserSettingsMock.mockReturnValue({
+      data: {
+        theme: 'system',
+        model: 'gpt-4.1-mini',
+        showReasoningMetadata: false,
+      },
+    });
+
+    render(createElement(ChatView, { initialConversationId: 'conversation_1' }));
+
+    expect(screen.queryByText('Reasoning metadata')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inspected the indexed report.')).not.toBeInTheDocument();
   });
 });
