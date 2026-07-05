@@ -47,6 +47,7 @@ describe('upload route', () => {
       externalExecutionId: 'exec_123',
       status: 'RUNNING',
       storagePath: '/uploads/report.pdf',
+      reconciliationRequired: false,
     });
   });
 
@@ -81,6 +82,7 @@ describe('upload route', () => {
         externalExecutionId: 'exec_123',
         status: 'RUNNING',
         storagePath: '/uploads/report.pdf',
+        reconciliationRequired: false,
       },
     });
     expect(routeMocks.rateLimit).toHaveBeenCalledWith(
@@ -159,6 +161,45 @@ describe('upload route', () => {
         },
       },
     });
+    expect(routeMocks.createUpload).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversize uploads before reading file bytes', async () => {
+    const file = new File([Buffer.from('report bytes')], 'report.pdf', {
+      type: 'application/pdf',
+    });
+    Object.defineProperty(file, 'size', {
+      configurable: true,
+      value: 52_428_801,
+    });
+    const arrayBufferSpy = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('should not be called'));
+    const formData = new FormData();
+    formData.set('file', file);
+
+    const request = new Request('https://app.example.com/api/upload', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_oversize',
+      },
+    });
+    vi.spyOn(request, 'formData').mockResolvedValue(formData);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'File exceeds the maximum upload size.',
+        requestId: 'req_oversize',
+        details: {
+          maxBytes: 52_428_800,
+        },
+      },
+    });
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
     expect(routeMocks.createUpload).not.toHaveBeenCalled();
   });
 });

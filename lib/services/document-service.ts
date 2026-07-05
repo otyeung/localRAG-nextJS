@@ -5,7 +5,7 @@ import { DocumentStatus, WorkflowStatus, type Document, type PrismaClient } from
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { N8nIngestionService } from '@/lib/n8n/ingestion';
-import { AuditService, type AuditEventInput } from '@/lib/services/audit-service';
+import type { AuditEventInput } from '@/lib/services/audit-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 
 type DocumentDb = Pick<typeof prisma, 'document' | 'workflowExecution'>;
@@ -82,7 +82,6 @@ export class DocumentService {
   constructor(
     private readonly dependencies: {
       db?: DocumentDb;
-      auditService?: Pick<AuditService, 'record'>;
       ingestionService?: Pick<N8nIngestionService, 'startDocumentIngestion'>;
       transactionRunner?: TransactionRunner;
     } = {},
@@ -90,10 +89,6 @@ export class DocumentService {
 
   private get db(): DocumentDb {
     return this.dependencies.db ?? prisma;
-  }
-
-  private get auditService(): Pick<AuditService, 'record'> {
-    return this.dependencies.auditService ?? new AuditService();
   }
 
   private get ingestionService(): Pick<N8nIngestionService, 'startDocumentIngestion'> {
@@ -182,26 +177,32 @@ export class DocumentService {
       throw new AppError('NOT_FOUND', 'Document not found.');
     }
 
-    const deleted = await this.db.document.update({
-      where: { id: documentId },
-      data: {
-        status: DocumentStatus.DELETED,
-        deletedAt: new Date(),
-      },
-    });
+    const deleted = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+      const deleted = await transaction.document.update({
+        where: { id: documentId },
+        data: {
+          status: DocumentStatus.DELETED,
+          deletedAt: new Date(),
+        },
+      });
 
-    await this.auditService.record({
-      userId,
-      action: 'document.deleted',
-      entityType: 'document',
-      entityId: documentId,
-      requestId: auditContext.requestId,
-      ipAddress: auditContext.ipAddress,
-      userAgent: auditContext.userAgent,
-      metadata: {
-        title: document.title,
-        originalFilename: document.originalFilename,
-      },
+      await transaction.auditLog.create({
+        data: {
+          userId,
+          action: 'document.deleted',
+          entityType: 'document',
+          entityId: documentId,
+          requestId: auditContext.requestId,
+          ipAddress: auditContext.ipAddress,
+          userAgent: auditContext.userAgent,
+          metadata: {
+            title: document.title,
+            originalFilename: document.originalFilename,
+          },
+        },
+      });
+
+      return deleted;
     });
 
     return toDocumentDto(deleted);

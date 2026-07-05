@@ -1,15 +1,18 @@
 import { z } from 'zod';
 
 import { getCurrentUser } from '@/lib/auth/current-user';
+import { env } from '@/lib/config/env';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
 import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
+import { UploadValidationService } from '@/lib/services/upload-validation-service';
 import { UploadService } from '@/lib/services/upload-service';
 
 const uploadService = new UploadService();
+const uploadValidationService = new UploadValidationService({ maxBytes: env.upload.maxBytes });
 const uploadMetadataSchema = z.object({
   fileName: z.string().trim().min(1, 'File name is required.'),
   mimeType: z.string().trim().min(1, 'MIME type is required.'),
@@ -37,6 +40,7 @@ export async function POST(request: Request): Promise<Response> {
       },
       'Invalid upload metadata.',
     );
+    await uploadValidationService.validate(uploadMetadata);
 
     const user = await getCurrentUser(request);
     const rateLimitResult = await rateLimit(`upload:post:${user.id}:${requestContext.ipAddress}`, {

@@ -120,6 +120,7 @@ describe('document services', () => {
       workflowExecutionId: 'workflow_1',
       externalExecutionId: 'exec_123',
       status: 'RUNNING',
+      reconciliationRequired: false,
     });
     expect(db.$transaction).toHaveBeenCalledTimes(2);
     expect(createTx.upload.create).toHaveBeenCalledOnce();
@@ -238,7 +239,7 @@ describe('document services', () => {
     expect(readdirSync(uploadTestDirectory)).toHaveLength(0);
   });
 
-  it('preserves live ingestion state when post-start persistence fails after n8n accepts the upload', async () => {
+  it('returns reconciliation-needed upload handles when post-start persistence fails after n8n accepts the upload', async () => {
     const createTx = {
       upload: {
         create: vi.fn().mockResolvedValue({ id: 'upload_1' }),
@@ -309,8 +310,13 @@ describe('document services', () => {
         mimeType: 'application/pdf',
         bytes: Buffer.from('hello world'),
       }),
-    ).rejects.toMatchObject({
-      code: 'INTERNAL_ERROR',
+    ).resolves.toMatchObject({
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      workflowExecutionId: 'workflow_1',
+      externalExecutionId: 'exec_123',
+      status: 'RUNNING',
+      reconciliationRequired: true,
     });
 
     expect(db.$transaction).toHaveBeenCalledTimes(2);
@@ -461,6 +467,29 @@ describe('document services', () => {
   });
 
   it('lists and soft deletes only documents owned by the current user', async () => {
+    const deleteTx = {
+      document: {
+        update: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.DELETED,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: 1024,
+          fileHash: 'hash_1',
+          storagePath: '/uploads/quarterly-report.pdf',
+          metadata: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-03T00:00:00.000Z'),
+          deletedAt: new Date('2026-01-03T00:00:00.000Z'),
+        }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const db = {
       document: {
         findMany: vi.fn().mockResolvedValue([
@@ -498,30 +527,16 @@ describe('document services', () => {
           updatedAt: new Date('2026-01-02T00:00:00.000Z'),
           deletedAt: null,
         }),
-        update: vi.fn().mockResolvedValue({
-          id: 'document_1',
-          userId: 'user_1',
-          uploadId: 'upload_1',
-          status: DocumentStatus.DELETED,
-          title: 'Quarterly Report',
-          originalFilename: 'quarterly-report.pdf',
-          mimeType: 'application/pdf',
-          fileSizeBytes: 1024,
-          fileHash: 'hash_1',
-          storagePath: '/uploads/quarterly-report.pdf',
-          metadata: null,
-          createdAt: new Date('2026-01-01T00:00:00.000Z'),
-          updatedAt: new Date('2026-01-03T00:00:00.000Z'),
-          deletedAt: new Date('2026-01-03T00:00:00.000Z'),
-        }),
+        update: vi.fn(),
       },
       workflowExecution: {
         create: vi.fn(),
         update: vi.fn(),
       },
-    };
-    const auditService = {
-      record: vi.fn().mockResolvedValue(undefined),
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn(async (callback: (transaction: typeof deleteTx) => Promise<unknown>) => callback(deleteTx)),
     };
     const ingestionService = {
       startDocumentIngestion: vi.fn(),
@@ -529,7 +544,6 @@ describe('document services', () => {
 
     const service = new DocumentService({
       db: db as never,
-      auditService: auditService as never,
       ingestionService: ingestionService as never,
     });
 
@@ -565,18 +579,29 @@ describe('document services', () => {
       }),
     );
     expect(deleted.status).toBe('DELETED');
-    expect(auditService.record).toHaveBeenCalledWith({
-      userId: 'user_1',
-      action: 'document.deleted',
-      entityType: 'document',
-      entityId: 'document_1',
-      requestId: 'req_delete',
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: expect.objectContaining({
-        title: 'Quarterly Report',
-      }),
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(deleteTx.document.update).toHaveBeenCalledWith({
+      where: { id: 'document_1' },
+      data: {
+        status: DocumentStatus.DELETED,
+        deletedAt: expect.any(Date),
+      },
     });
+    expect(deleteTx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'document.deleted',
+        entityType: 'document',
+        entityId: 'document_1',
+        requestId: 'req_delete',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: expect.objectContaining({
+          title: 'Quarterly Report',
+        }),
+      },
+    });
+    expect(db.document.update).not.toHaveBeenCalled();
   });
 
   it('records reindex audit logging in the same transaction as workflow/document updates', async () => {
@@ -747,6 +772,64 @@ describe('document services', () => {
         data: expect.objectContaining({ status: DocumentStatus.FAILED }),
       }),
     );
+  });
+
+  it('reconciles resource statuses for accepted workflows that already completed remotely', async () => {
+    const db = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.SUCCESS,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: { ok: true },
+          metadata: {
+            reconciliationRequired: true,
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: new Date('2026-01-01T00:01:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:01:00.000Z'),
+        }),
+        findMany: vi.fn(),
+        update: vi.fn(),
+      },
+      upload: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      document: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const executionService = {
+      pollExecution: vi.fn(),
+    };
+    const service = new WorkflowService({
+      db: db as never,
+      executionService: executionService as never,
+    });
+
+    const result = await service.getWorkflowStatus('user_1', 'workflow_1');
+
+    expect(executionService.pollExecution).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      id: 'workflow_1',
+      status: 'SUCCESS',
+      externalExecutionId: 'exec_123',
+    });
+    expect(db.upload.updateMany).toHaveBeenCalledWith({
+      where: { id: 'upload_1', userId: 'user_1' },
+      data: { status: UploadStatus.COMPLETED },
+    });
+    expect(db.document.updateMany).toHaveBeenCalledWith({
+      where: { id: 'document_1', userId: 'user_1' },
+      data: { status: DocumentStatus.READY },
+    });
   });
 
   it('polls running workflows and persists normalized completion status', async () => {

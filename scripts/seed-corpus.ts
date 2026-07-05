@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DocumentStatus } from '@prisma/client';
+import { DocumentStatus, WorkflowStatus } from '@prisma/client';
 
 import { createAnonymousFingerprintHash } from '@/lib/auth/anonymous-provider';
 import { prisma } from '@/lib/db/prisma';
@@ -49,6 +49,7 @@ type SeedCorpusDependencies = {
   uploadService?: Pick<UploadService, 'createUpload'>;
   workflowService?: Pick<WorkflowService, 'getWorkflowStatus'>;
   findReadyDocumentByHash?: (userId: string, fileHash: string) => Promise<{ id: string } | null>;
+  findReusableUploadByHash?: (userId: string, fileHash: string) => Promise<UploadResult | null>;
   createFingerprintHash?: (fingerprint: string) => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
@@ -130,6 +131,78 @@ export async function seedCorpus(dependencies: SeedCorpusDependencies = {}): Pro
         },
         select: { id: true },
       }));
+  const findReusableUploadByHash =
+    dependencies.findReusableUploadByHash ??
+    (async (userId: string, fileHash: string) => {
+      const document = await prisma.document.findFirst({
+        where: {
+          userId,
+          fileHash,
+          deletedAt: null,
+          workflows: {
+            some: {
+              workflowKey: 'ingestion',
+              externalExecutionId: {
+                not: null,
+              },
+              status: {
+                in: [WorkflowStatus.QUEUED, WorkflowStatus.RUNNING, WorkflowStatus.WAITING, WorkflowStatus.SUCCESS],
+              },
+            },
+          },
+        },
+        orderBy: {
+          updatedAt: 'desc',
+        },
+        select: {
+          id: true,
+          uploadId: true,
+          storagePath: true,
+          workflows: {
+            where: {
+              workflowKey: 'ingestion',
+              externalExecutionId: {
+                not: null,
+              },
+              status: {
+                in: [WorkflowStatus.QUEUED, WorkflowStatus.RUNNING, WorkflowStatus.WAITING, WorkflowStatus.SUCCESS],
+              },
+            },
+            orderBy: {
+              createdAt: 'desc',
+            },
+            take: 1,
+            select: {
+              id: true,
+              externalExecutionId: true,
+              status: true,
+              metadata: true,
+            },
+          },
+        },
+      });
+
+      const workflow = document?.workflows[0];
+      if (!document || !workflow) {
+        return null;
+      }
+
+      const metadata = workflow.metadata;
+      const reconciliationRequired =
+        !!metadata && typeof metadata === 'object' && !Array.isArray(metadata) && 'reconciliationRequired' in metadata
+          ? metadata.reconciliationRequired === true
+          : false;
+
+      return {
+        uploadId: document.uploadId,
+        documentId: document.id,
+        workflowExecutionId: workflow.id,
+        externalExecutionId: workflow.externalExecutionId,
+        status: workflow.status,
+        storagePath: document.storagePath,
+        reconciliationRequired,
+      };
+    });
   const wait = dependencies.sleep ?? sleep;
   const timeoutMs = dependencies.timeoutMs ?? 120_000;
   const pollIntervalMs = dependencies.pollIntervalMs ?? 2_000;
@@ -151,20 +224,22 @@ export async function seedCorpus(dependencies: SeedCorpusDependencies = {}): Pro
       continue;
     }
 
-    let uploadResult: UploadResult;
-    try {
-      uploadResult = await uploadService.createUpload({
-        userId: user.id,
-        fileName: record.file,
-        mimeType: 'application/pdf',
-        bytes: new Uint8Array(readFileSync(record.path)),
-      });
-    } catch (error) {
-      result.failed.push({
-        file: record.file,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      continue;
+    let uploadResult = await findReusableUploadByHash(user.id, record.sha256);
+    if (!uploadResult) {
+      try {
+        uploadResult = await uploadService.createUpload({
+          userId: user.id,
+          fileName: record.file,
+          mimeType: 'application/pdf',
+          bytes: new Uint8Array(readFileSync(record.path)),
+        });
+      } catch (error) {
+        result.failed.push({
+          file: record.file,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
     }
 
     const startedAt = Date.now();

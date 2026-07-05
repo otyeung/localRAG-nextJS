@@ -27,6 +27,7 @@ describe('seedCorpus', () => {
         externalExecutionId: 'exec_2',
         status: 'RUNNING',
         storagePath: '/uploads/cymbal-starlight-2024.pdf',
+        reconciliationRequired: false,
       }),
     };
     const workflowService = {
@@ -72,6 +73,7 @@ describe('seedCorpus', () => {
         externalExecutionId: 'exec_2',
         status: 'RUNNING',
         storagePath: '/uploads/cymbal-starlight-2024.pdf',
+        reconciliationRequired: false,
       }),
     };
     const workflowService = {
@@ -109,5 +111,53 @@ describe('seedCorpus', () => {
         bytes: expect.any(Uint8Array),
       }),
     );
+  });
+
+  it('reuses accepted reconciliation-needed workflows instead of re-uploading on retry', async () => {
+    const findReadyDocumentByHash = vi.fn().mockResolvedValue(null);
+    const findReusableUploadByHash = vi.fn().mockResolvedValue({
+      uploadId: 'upload_1',
+      documentId: 'document_1',
+      workflowExecutionId: 'workflow_1',
+      externalExecutionId: 'exec_1',
+      status: 'RUNNING',
+      storagePath: '/uploads/1706.03762v7.pdf',
+      reconciliationRequired: true,
+    });
+    const uploadService = {
+      createUpload: vi.fn(),
+    };
+    const workflowService = {
+      getWorkflowStatus: vi.fn().mockResolvedValue({
+        id: 'workflow_1',
+        status: 'SUCCESS',
+        externalExecutionId: 'exec_1',
+      }),
+    };
+    const userRepository = {
+      findOrCreateAnonymousUser: vi.fn().mockResolvedValue({ id: 'user_1' }),
+    };
+
+    const result = await seedCorpus({
+      findReadyDocumentByHash,
+      findReusableUploadByHash,
+      uploadService: uploadService as never,
+      workflowService: workflowService as never,
+      userRepository: userRepository as never,
+      createFingerprintHash: async () => 'fingerprint-hash',
+      sleep: async () => undefined,
+      pollIntervalMs: 1,
+      timeoutMs: 10,
+    });
+
+    expect(result.ingested).toContainEqual({
+      file: '1706.03762v7.pdf',
+      workflowExecutionId: 'workflow_1',
+      documentId: 'document_1',
+      uploadId: 'upload_1',
+    });
+    expect(uploadService.createUpload).not.toHaveBeenCalled();
+    expect(findReusableUploadByHash).toHaveBeenCalledWith('user_1', expect.any(String));
+    expect(workflowService.getWorkflowStatus).toHaveBeenCalledWith('user_1', 'workflow_1');
   });
 });

@@ -72,6 +72,14 @@ function toWorkflowDto(workflow: WorkflowExecution): WorkflowExecutionDto {
   };
 }
 
+function isReconciliationRequired(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return false;
+  }
+
+  return metadata instanceof Object && 'reconciliationRequired' in metadata && metadata.reconciliationRequired === true;
+}
+
 export class WorkflowService {
   constructor(
     private readonly dependencies: {
@@ -139,6 +147,10 @@ export class WorkflowService {
 
       await this.syncResourceStatuses(userId, updated);
       return toWorkflowDto(updated);
+    }
+
+    if (isReconciliationRequired(workflow.metadata)) {
+      await this.syncResourceStatuses(userId, workflow);
     }
 
     return toWorkflowDto(workflow);

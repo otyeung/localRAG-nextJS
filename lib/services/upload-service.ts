@@ -36,6 +36,7 @@ export type UploadResult = {
   externalExecutionId: string | null;
   status: keyof typeof WorkflowStatus;
   storagePath: string;
+  reconciliationRequired: boolean;
 };
 
 export type UploadHistoryItem = {
@@ -265,9 +266,10 @@ export class UploadService {
         externalExecutionId: updatedWorkflow.externalExecutionId,
         status: updatedWorkflow.status,
         storagePath,
+        reconciliationRequired: false,
       };
     } catch (error) {
-      await this.db.workflowExecution.update({
+      const reconciledWorkflow = await this.db.workflowExecution.update({
         where: { id: workflow.id },
         data: {
           externalExecutionId: startResult.executionId,
@@ -280,10 +282,15 @@ export class UploadService {
         },
       });
 
-      throw new AppError(
-        'INTERNAL_ERROR',
-        'Document ingestion started, but local state reconciliation is required.',
-      );
+      return {
+        uploadId: upload.id,
+        documentId: document.id,
+        workflowExecutionId: workflow.id,
+        externalExecutionId: reconciledWorkflow.externalExecutionId,
+        status: reconciledWorkflow.status,
+        storagePath,
+        reconciliationRequired: true,
+      };
     }
   }
 
