@@ -65,4 +65,16 @@ describe('rateLimit', () => {
 
     expect(getRateLimitBucketCountForTests()).toBe(1);
   });
+
+  it('caps live bucket growth for high-cardinality keys', async () => {
+    const policy = { limit: 1, windowMs: 10_000, maxBuckets: 3 };
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.000Z'));
+
+    for (let index = 0; index < 10; index += 1) {
+      await rateLimit(`ip-${index}`, policy);
+    }
+
+    expect(getRateLimitBucketCountForTests()).toBe(3);
+  });
 });

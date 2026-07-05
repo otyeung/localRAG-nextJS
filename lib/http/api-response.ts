@@ -44,6 +44,8 @@ function sanitizeDetails(value: unknown, seen: WeakSet<object>): unknown {
     seen.add(value);
     try {
       return value.map((item) => sanitizeDetails(item, seen));
+    } catch {
+      return UNSERIALIZABLE_DETAILS;
     } finally {
       seen.delete(value);
     }
@@ -57,9 +59,10 @@ function sanitizeDetails(value: unknown, seen: WeakSet<object>): unknown {
     }
     seen.add(value);
     try {
-      return Object.fromEntries(
-        Object.entries(value).map(([key, entry]) => [key, sanitizeDetails(entry, seen)]),
-      );
+      const entries = Object.entries(value);
+      return Object.fromEntries(entries.map(([key, entry]) => [key, sanitizeDetails(entry, seen)]));
+    } catch {
+      return UNSERIALIZABLE_DETAILS;
     } finally {
       seen.delete(value);
     }
@@ -73,7 +76,14 @@ export function jsonOk<T>(data: T, init?: ResponseInit): Response {
 }
 
 export function jsonError(error: AppError, requestId: string): Response {
-  const details = error.code === 'INTERNAL_ERROR' ? undefined : serializeDetails(error.details);
+  let details: unknown;
+  if (error.code !== 'INTERNAL_ERROR') {
+    try {
+      details = serializeDetails(error.details);
+    } catch {
+      details = UNSERIALIZABLE_DETAILS;
+    }
+  }
 
   return Response.json(
     {

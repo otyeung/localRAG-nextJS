@@ -106,4 +106,71 @@ describe('json response helpers', () => {
       },
     });
   });
+
+  it('falls back when details getter throws', async () => {
+    const details = {};
+    Object.defineProperty(details, 'danger', {
+      enumerable: true,
+      get() {
+        throw new Error('getter exploded');
+      },
+    });
+
+    const response = jsonError(new AppError('BAD_REQUEST', 'Invalid input', details), 'request-5');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid input',
+        requestId: 'request-5',
+        details: { message: 'Details could not be serialized.' },
+      },
+    });
+  });
+
+  it('falls back when app error details accessor throws', async () => {
+    const error = new AppError('BAD_REQUEST', 'Invalid input', { ok: true });
+    Object.defineProperty(error, 'details', {
+      enumerable: true,
+      get() {
+        throw new Error('details accessor exploded');
+      },
+    });
+
+    const response = jsonError(error, 'request-7');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid input',
+        requestId: 'request-7',
+        details: { message: 'Details could not be serialized.' },
+      },
+    });
+  });
+
+  it('falls back when proxy traps throw during serialization', async () => {
+    const details = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('ownKeys exploded');
+        },
+      },
+    );
+
+    const response = jsonError(new AppError('BAD_REQUEST', 'Invalid input', details), 'request-6');
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Invalid input',
+        requestId: 'request-6',
+        details: { message: 'Details could not be serialized.' },
+      },
+    });
+  });
 });
