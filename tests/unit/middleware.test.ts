@@ -22,12 +22,18 @@ describe('middleware', () => {
     const response = middleware(request);
     const csp = response.headers.get('content-security-policy');
     const nonce = response.headers.get('x-middleware-request-x-nonce');
+    const requestCsp = response.headers.get('x-middleware-request-content-security-policy');
     const scriptSrc = csp?.match(/script-src[^;]+/)?.[0] ?? '';
 
     expect(response.headers.get('x-request-id')).toBe('request-123');
     expect(response.headers.get('x-middleware-override-headers')).toContain('x-nonce');
+    expect(response.headers.get('x-middleware-override-headers')).toContain('content-security-policy');
+    expect(requestCsp).toContain("script-src 'self' 'nonce-");
     expect(nonce).toBeTruthy();
     expect(scriptSrc).toBe(`script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`);
+    expect(csp).toContain(`script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`);
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
   });
 
   it('keeps dev script directives compatible with Next dev', () => {

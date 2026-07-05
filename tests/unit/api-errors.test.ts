@@ -54,6 +54,25 @@ describe('json response helpers', () => {
     });
   });
 
+  it('does not expose direct internal app error details', async () => {
+    const response = jsonError(
+      new AppError('INTERNAL_ERROR', 'Sensitive failure', {
+        token: 'secret',
+        nested: { password: 'hidden' },
+      }),
+      'request-2b',
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Sensitive failure',
+        requestId: 'request-2b',
+      },
+    });
+  });
+
   it('serializes bigint app error details safely', async () => {
     const response = jsonError(new AppError('BAD_REQUEST', 'Invalid input', { amount: 1n }), 'request-3');
 

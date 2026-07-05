@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import './globals.css';
 import { siteDescription, siteTitle } from './site-content';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: siteTitle,
   description: siteDescription,

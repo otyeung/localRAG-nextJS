@@ -73,13 +73,15 @@ export function jsonOk<T>(data: T, init?: ResponseInit): Response {
 }
 
 export function jsonError(error: AppError, requestId: string): Response {
+  const details = error.code === 'INTERNAL_ERROR' ? undefined : serializeDetails(error.details);
+
   return Response.json(
     {
       error: {
         code: error.code,
         message: error.message,
         requestId,
-        details: error.details === undefined ? undefined : serializeDetails(error.details),
+        ...(details === undefined ? {} : { details }),
       },
     },
     { status: error.status },
