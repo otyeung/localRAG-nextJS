@@ -1,12 +1,18 @@
+import { z } from 'zod';
+
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
+import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
 import { DocumentService } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
+const documentRouteParamsSchema = z.object({
+  id: z.string().trim().min(1, 'Document id is required.'),
+});
 
 type RouteContext = {
   params: Promise<{
@@ -18,7 +24,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   const requestContext = getRequestContext(request);
 
   try {
-    const { id } = await context.params;
+    const { id } = validateWithSchema(documentRouteParamsSchema, await context.params, 'Invalid document route parameters.');
     const user = await getCurrentUser(request);
     const rateLimitResult = await rateLimit(`documents:get-one:${user.id}:${requestContext.ipAddress}`, {
       namespace: 'documents-api',
@@ -43,7 +49,7 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
 
   try {
     assertSameOrigin(request);
-    const { id } = await context.params;
+    const { id } = validateWithSchema(documentRouteParamsSchema, await context.params, 'Invalid document route parameters.');
     const user = await getCurrentUser(request);
     const rateLimitResult = await rateLimit(`documents:delete:${user.id}:${requestContext.ipAddress}`, {
       namespace: 'documents-api',

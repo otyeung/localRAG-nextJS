@@ -128,6 +128,39 @@ describe('documents routes', () => {
     });
   });
 
+  it('returns structured validation errors for invalid list params', async () => {
+    const request = new Request(
+      'https://app.example.com/api/documents?status=NOPE&sort=bogus&order=sideways&page=0&pageSize=999',
+      {
+        headers: {
+          'x-request-id': 'req_documents_invalid',
+        },
+      },
+    );
+
+    const response = await listDocumentsRoute(request);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid document query parameters.',
+        requestId: 'req_documents_invalid',
+        details: {
+          formErrors: [],
+          fieldErrors: {
+            status: expect.any(Array),
+            sort: expect.any(Array),
+            order: expect.any(Array),
+            page: expect.any(Array),
+            pageSize: expect.any(Array),
+          },
+        },
+      },
+    });
+    expect(routeMocks.listDocuments).not.toHaveBeenCalled();
+  });
+
   it('returns one document by id', async () => {
     const request = new Request('https://app.example.com/api/documents/document_1', {
       headers: {
@@ -152,6 +185,34 @@ describe('documents routes', () => {
         updatedAt: '2026-01-02T00:00:00.000Z',
       },
     });
+  });
+
+  it('returns structured validation errors for invalid document ids', async () => {
+    const request = new Request('https://app.example.com/api/documents/%20%20', {
+      headers: {
+        'x-request-id': 'req_document_invalid',
+      },
+    });
+
+    const response = await getDocumentRoute(request, {
+      params: Promise.resolve({ id: '   ' }),
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid document route parameters.',
+        requestId: 'req_document_invalid',
+        details: {
+          formErrors: [],
+          fieldErrors: {
+            id: expect.any(Array),
+          },
+        },
+      },
+    });
+    expect(routeMocks.getDocument).not.toHaveBeenCalled();
   });
 
   it('soft deletes documents for the current user', async () => {

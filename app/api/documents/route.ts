@@ -1,16 +1,33 @@
+import { DocumentStatus } from '@prisma/client';
+import { z } from 'zod';
+
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
+import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { rateLimit } from '@/lib/security/rate-limit';
 import { DocumentService, type DocumentQuery } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
+const documentQuerySchema = z.object({
+  search: z.preprocess(
+    (value) => {
+      if (typeof value !== 'string') {
+        return value;
+      }
 
-function parsePositiveInteger(value: string | null, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    },
+    z.string().min(1).optional(),
+  ),
+  status: z.enum(Object.keys(DocumentStatus) as [keyof typeof DocumentStatus, ...Array<keyof typeof DocumentStatus>]).optional(),
+  sort: z.enum(['createdAt', 'updatedAt', 'title']).optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export async function GET(request: Request): Promise<Response> {
   const requestContext = getRequestContext(request);
@@ -30,14 +47,18 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const url = new URL(request.url);
-    const query: DocumentQuery = {
-      search: url.searchParams.get('query') ?? undefined,
-      status: (url.searchParams.get('status') as DocumentQuery['status']) ?? undefined,
-      sort: (url.searchParams.get('sort') as DocumentQuery['sort']) ?? undefined,
-      order: (url.searchParams.get('order') as DocumentQuery['order']) ?? undefined,
-      page: parsePositiveInteger(url.searchParams.get('page'), 1),
-      pageSize: parsePositiveInteger(url.searchParams.get('pageSize'), 20),
-    };
+    const query: DocumentQuery = validateWithSchema(
+      documentQuerySchema,
+      {
+        search: url.searchParams.get('query') ?? undefined,
+        status: url.searchParams.get('status') ?? undefined,
+        sort: url.searchParams.get('sort') ?? undefined,
+        order: url.searchParams.get('order') ?? undefined,
+        page: url.searchParams.get('page') ?? undefined,
+        pageSize: url.searchParams.get('pageSize') ?? undefined,
+      },
+      'Invalid document query parameters.',
+    );
 
     return jsonOk(await documentService.listDocuments(user.id, query));
   } catch (error) {

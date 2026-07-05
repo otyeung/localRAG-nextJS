@@ -122,4 +122,43 @@ describe('upload route', () => {
       },
     });
   });
+
+  it('returns structured validation errors for invalid multipart metadata', async () => {
+    const formData = new FormData();
+    formData.set(
+      'file',
+      new File([Buffer.from('report bytes')], '   ', {
+        type: '',
+      }),
+    );
+
+    const request = new Request('https://app.example.com/api/upload', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_invalid_metadata',
+      },
+    });
+    vi.spyOn(request, 'formData').mockResolvedValue(formData);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid upload metadata.',
+        requestId: 'req_invalid_metadata',
+        details: {
+          formErrors: [],
+          fieldErrors: {
+            fileName: expect.any(Array),
+            mimeType: expect.any(Array),
+          },
+        },
+      },
+    });
+    expect(routeMocks.createUpload).not.toHaveBeenCalled();
+  });
 });

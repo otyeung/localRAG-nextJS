@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { DocumentStatus, WorkflowStatus, type Document } from '@prisma/client';
+import { DocumentStatus, WorkflowStatus, type Document, type PrismaClient } from '@prisma/client';
 
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
@@ -9,6 +9,8 @@ import { AuditService, type AuditEventInput } from '@/lib/services/audit-service
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 
 type DocumentDb = Pick<typeof prisma, 'document' | 'workflowExecution'>;
+type DocumentTransactionDb = Pick<typeof prisma, 'workflowExecution' | 'document' | 'auditLog'>;
+type TransactionRunner = Pick<PrismaClient, '$transaction'>;
 
 export type DocumentDto = {
   id: string;
@@ -66,6 +68,7 @@ export class DocumentService {
       db?: DocumentDb;
       auditService?: Pick<AuditService, 'record'>;
       ingestionService?: Pick<N8nIngestionService, 'startDocumentIngestion'>;
+      transactionRunner?: TransactionRunner;
     } = {},
   ) {}
 
@@ -79,6 +82,19 @@ export class DocumentService {
 
   private get ingestionService(): Pick<N8nIngestionService, 'startDocumentIngestion'> {
     return this.dependencies.ingestionService ?? new N8nIngestionService();
+  }
+
+  private get transactionRunner(): TransactionRunner {
+    if (this.dependencies.transactionRunner) {
+      return this.dependencies.transactionRunner;
+    }
+
+    const db = this.dependencies.db as Partial<TransactionRunner> | undefined;
+    if (db?.$transaction) {
+      return db as TransactionRunner;
+    }
+
+    return prisma;
   }
 
   async listDocuments(userId: string, query: DocumentQuery): Promise<DocumentListResult> {
@@ -207,19 +223,40 @@ export class DocumentService {
       requestId,
     });
 
-    const updatedWorkflow = await this.db.workflowExecution.update({
-      where: { id: workflow.id },
-      data: {
-        externalExecutionId: startResult.executionId,
-        status: mapN8nStatusToWorkflowStatus(startResult.status),
-      },
-    });
+    const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
 
-    await this.db.document.update({
-      where: { id: document.id },
-      data: {
-        status: DocumentStatus.INGESTING,
-      },
+    const updatedWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+      const updatedWorkflow = await transaction.workflowExecution.update({
+        where: { id: workflow.id },
+        data: {
+          externalExecutionId: startResult.executionId,
+          status: nextWorkflowStatus,
+        },
+      });
+
+      await transaction.document.update({
+        where: { id: document.id },
+        data: {
+          status: DocumentStatus.INGESTING,
+        },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          userId,
+          action: 'document.reindex_requested',
+          entityType: 'document',
+          entityId: document.id,
+          requestId,
+          metadata: {
+            workflowExecutionId: workflow.id,
+            externalExecutionId: startResult.executionId,
+            uploadId: document.uploadId,
+          },
+        },
+      });
+
+      return updatedWorkflow;
     });
 
     return {

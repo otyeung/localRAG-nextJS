@@ -1,10 +1,10 @@
 import 'server-only';
 
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { basename, parse, resolve } from 'node:path';
 
-import { UploadStatus, WorkflowStatus, type Upload } from '@prisma/client';
+import { UploadStatus, WorkflowStatus, type PrismaClient, type Upload } from '@prisma/client';
 
 import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
@@ -16,6 +16,8 @@ import { VirusScanService } from '@/lib/services/virus-scan-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
 
 type UploadDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
+type UploadTransactionDb = Pick<typeof prisma, 'upload' | 'document' | 'workflowExecution'>;
+type TransactionRunner = Pick<PrismaClient, '$transaction'>;
 
 export type CreateUploadInput = {
   userId: string;
@@ -55,6 +57,14 @@ function safeFileName(fileName: string): string {
   return basename(fileName).replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+function sanitizeFileStem(stem: string): string {
+  return stem.replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function sanitizeExtension(extension: string): string {
+  return extension.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+}
+
 function mapWorkflowStatusToUploadStatus(status: WorkflowStatus): UploadStatus {
   switch (status) {
     case WorkflowStatus.SUCCESS:
@@ -88,6 +98,7 @@ export class UploadService {
       virusScanService?: Pick<VirusScanService, 'scanFile'>;
       ingestionService?: Pick<N8nIngestionService, 'startDocumentIngestion'>;
       auditService?: Pick<AuditService, 'record'>;
+      transactionRunner?: TransactionRunner;
       uploadConfig?: {
         maxBytes: number;
         tempDirectory: string;
@@ -119,6 +130,19 @@ export class UploadService {
     return this.dependencies.uploadConfig ?? env.upload;
   }
 
+  private get transactionRunner(): TransactionRunner {
+    if (this.dependencies.transactionRunner) {
+      return this.dependencies.transactionRunner;
+    }
+
+    const db = this.dependencies.db as Partial<TransactionRunner> | undefined;
+    if (db?.$transaction) {
+      return db as TransactionRunner;
+    }
+
+    return prisma;
+  }
+
   async createUpload(input: CreateUploadInput): Promise<UploadResult> {
     const validation = await this.validationService.validate({
       fileName: input.fileName,
@@ -127,130 +151,107 @@ export class UploadService {
     });
 
     const storagePath = await this.persistUploadBytes(input.fileName, input.bytes);
-    await this.virusScanService.scanFile(storagePath);
-    const fileHash = createFileHash(input.bytes);
-
-    const upload = await this.db.upload.create({
-      data: {
-        userId: input.userId,
-        status: UploadStatus.VALIDATING,
-        originalFilename: input.fileName,
-        mimeType: validation.normalizedMimeType,
-        fileSizeBytes: input.bytes.byteLength,
-        fileHash,
-        storagePath,
-      },
-    });
-
-    const document = await this.db.document.create({
-      data: {
-        userId: input.userId,
-        uploadId: upload.id,
-        title: this.buildDocumentTitle(input.fileName),
-        originalFilename: input.fileName,
-        mimeType: validation.normalizedMimeType,
-        fileSizeBytes: input.bytes.byteLength,
-        fileHash,
-        storagePath,
-        status: 'PENDING',
-      },
-    });
-
-    const workflow = await this.db.workflowExecution.create({
-      data: {
-        userId: input.userId,
-        uploadId: upload.id,
-        documentId: document.id,
-        workflowKey: 'ingestion',
-        status: WorkflowStatus.QUEUED,
-      },
-    });
-
     try {
-      const startResult = await this.ingestionService.startDocumentIngestion({
-        documentId: document.id,
-        uploadId: upload.id,
-        filePath: storagePath,
+      await this.virusScanService.scanFile(storagePath);
+      const fileHash = createFileHash(input.bytes);
+      const { upload, document, workflow } = await this.createUploadRecords({
+        userId: input.userId,
         fileName: input.fileName,
         mimeType: validation.normalizedMimeType,
-        requestId: input.requestId,
-      });
-      const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
-
-      await Promise.all([
-        this.db.upload.update({
-          where: { id: upload.id },
-          data: {
-            status: mapWorkflowStatusToUploadStatus(nextWorkflowStatus),
-          },
-        }),
-        this.db.document.update({
-          where: { id: document.id },
-          data: {
-            status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
-          },
-        }),
-      ]);
-
-      const updatedWorkflow = await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          externalExecutionId: startResult.executionId,
-          status: nextWorkflowStatus,
-          metadata: {
-            workflowId: startResult.workflowId,
-          },
-        },
-      });
-
-      await this.auditService.record({
-        userId: input.userId,
-        action: 'upload.created',
-        entityType: 'upload',
-        entityId: upload.id,
-        requestId: input.requestId,
-        ipAddress: input.ipAddress,
-        userAgent: input.userAgent,
-        metadata: {
-          documentId: document.id,
-          workflowExecutionId: workflow.id,
-          externalExecutionId: startResult.executionId,
-        },
-      });
-
-      return {
-        uploadId: upload.id,
-        documentId: document.id,
-        workflowExecutionId: workflow.id,
-        externalExecutionId: updatedWorkflow.externalExecutionId,
-        status: updatedWorkflow.status,
+        fileSizeBytes: input.bytes.byteLength,
+        fileHash,
         storagePath,
-      };
-    } catch (error) {
-      await Promise.all([
-        this.db.upload.update({
-          where: { id: upload.id },
-          data: {
-            status: UploadStatus.FAILED,
-            errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
-          },
-        }),
-        this.db.document.update({
-          where: { id: document.id },
-          data: {
-            status: 'FAILED',
-          },
-        }),
-        this.db.workflowExecution.update({
+      });
+
+      try {
+        const startResult = await this.ingestionService.startDocumentIngestion({
+          documentId: document.id,
+          uploadId: upload.id,
+          filePath: storagePath,
+          fileName: input.fileName,
+          mimeType: validation.normalizedMimeType,
+          requestId: input.requestId,
+        });
+        const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
+
+        await Promise.all([
+          this.db.upload.update({
+            where: { id: upload.id },
+            data: {
+              status: mapWorkflowStatusToUploadStatus(nextWorkflowStatus),
+            },
+          }),
+          this.db.document.update({
+            where: { id: document.id },
+            data: {
+              status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
+            },
+          }),
+        ]);
+
+        const updatedWorkflow = await this.db.workflowExecution.update({
           where: { id: workflow.id },
           data: {
-            status: WorkflowStatus.ERROR,
-            errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
+            externalExecutionId: startResult.executionId,
+            status: nextWorkflowStatus,
+            metadata: {
+              workflowId: startResult.workflowId,
+            },
           },
-        }),
-      ]);
+        });
 
-      throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
+        await this.auditService.record({
+          userId: input.userId,
+          action: 'upload.created',
+          entityType: 'upload',
+          entityId: upload.id,
+          requestId: input.requestId,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+          metadata: {
+            documentId: document.id,
+            workflowExecutionId: workflow.id,
+            externalExecutionId: startResult.executionId,
+          },
+        });
+
+        return {
+          uploadId: upload.id,
+          documentId: document.id,
+          workflowExecutionId: workflow.id,
+          externalExecutionId: updatedWorkflow.externalExecutionId,
+          status: updatedWorkflow.status,
+          storagePath,
+        };
+      } catch (error) {
+        await Promise.all([
+          this.db.upload.update({
+            where: { id: upload.id },
+            data: {
+              status: UploadStatus.FAILED,
+              errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
+            },
+          }),
+          this.db.document.update({
+            where: { id: document.id },
+            data: {
+              status: 'FAILED',
+            },
+          }),
+          this.db.workflowExecution.update({
+            where: { id: workflow.id },
+            data: {
+              status: WorkflowStatus.ERROR,
+              errorMessage: error instanceof Error ? error.message : 'Upload ingestion failed.',
+            },
+          }),
+        ]);
+
+        throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
+      }
+    } catch (error) {
+      await this.removeTempFile(storagePath);
+      throw error;
     }
   }
 
@@ -275,10 +276,84 @@ export class UploadService {
   private async persistUploadBytes(fileName: string, bytes: Uint8Array): Promise<string> {
     const targetDirectory = resolve(this.uploadConfig.tempDirectory);
     await mkdir(targetDirectory, { recursive: true });
-    const storedFileName = `${Date.now()}-${safeFileName(fileName)}`;
+    const storedFileName = this.buildStoredFileName(fileName);
     const storagePath = resolve(targetDirectory, storedFileName);
     await writeFile(storagePath, Buffer.from(bytes));
     return storagePath;
+  }
+
+  private async createUploadRecords(input: {
+    userId: string;
+    fileName: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    fileHash: string;
+    storagePath: string;
+  }): Promise<{
+    upload: { id: string };
+    document: { id: string };
+    workflow: { id: string };
+  }> {
+    return this.transactionRunner.$transaction(async (transaction: UploadTransactionDb) => {
+      const upload = await transaction.upload.create({
+        data: {
+          userId: input.userId,
+          status: UploadStatus.VALIDATING,
+          originalFilename: input.fileName,
+          mimeType: input.mimeType,
+          fileSizeBytes: input.fileSizeBytes,
+          fileHash: input.fileHash,
+          storagePath: input.storagePath,
+        },
+      });
+
+      const document = await transaction.document.create({
+        data: {
+          userId: input.userId,
+          uploadId: upload.id,
+          title: this.buildDocumentTitle(input.fileName),
+          originalFilename: input.fileName,
+          mimeType: input.mimeType,
+          fileSizeBytes: input.fileSizeBytes,
+          fileHash: input.fileHash,
+          storagePath: input.storagePath,
+          status: 'PENDING',
+        },
+      });
+
+      const workflow = await transaction.workflowExecution.create({
+        data: {
+          userId: input.userId,
+          uploadId: upload.id,
+          documentId: document.id,
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.QUEUED,
+        },
+      });
+
+      return { upload, document, workflow };
+    });
+  }
+
+  private buildStoredFileName(fileName: string): string {
+    const parsed = parse(safeFileName(fileName));
+    const stem = sanitizeFileStem(parsed.name) || 'upload';
+    const extension = sanitizeExtension(parsed.ext.startsWith('.') ? parsed.ext.slice(1) : parsed.ext);
+    const uniqueId = randomUUID();
+
+    return extension ? `${stem}-${uniqueId}.${extension}` : `${stem}-${uniqueId}`;
+  }
+
+  private async removeTempFile(storagePath: string): Promise<void> {
+    try {
+      await unlink(storagePath);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   private buildDocumentTitle(fileName: string): string {
