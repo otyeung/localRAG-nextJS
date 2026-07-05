@@ -64,6 +64,13 @@ describe('docker compose', () => {
     expect(compose).not.toContain('dev-n8n-api-key');
   });
 
+  it('documents an empty n8n api key in the example env for post-setup manual provisioning', () => {
+    const exampleEnv = readFileSync('.env.example', 'utf8');
+
+    expect(exampleEnv).toContain('N8N_API_KEY=');
+    expect(exampleEnv).not.toContain('N8N_API_KEY=dev-');
+  });
+
   it('marks imported n8n workflows as active for production webhook registration', () => {
     expect(ingestionWorkflow.active).toBe(true);
     expect(retrievalWorkflow.active).toBe(true);
@@ -82,9 +89,24 @@ describe('docker compose', () => {
     expect(buildPointCode).toContain('fileName');
     expect(buildPointCode).toContain('chunkIndex');
     expect(buildPointCode).toContain('content');
+    expect(buildPointCode).not.toContain('extractedText');
     expect(upsertBody).toContain('"uploadId":$json.uploadId');
     expect(upsertBody).toContain('"fileName":$json.fileName');
+    expect(upsertBody).not.toContain('extractedText');
     expect(embedBody).toContain('OPENAI_EMBEDDING_MODEL');
+  });
+
+  it('does not duplicate full extracted text into chunk or point payloads', () => {
+    const chunkNode = getNode(ingestionWorkflow, 'Chunk Text');
+    const chunkCode = String(chunkNode.parameters?.jsCode ?? '');
+    const buildPointNode = getNode(ingestionWorkflow, 'Build Qdrant Point');
+    const buildPointCode = String(buildPointNode.parameters?.jsCode ?? '');
+    const upsertNode = getNode(ingestionWorkflow, 'Upsert Into Qdrant');
+    const upsertBody = String(upsertNode.parameters?.jsonBody ?? '');
+
+    expect(chunkCode).not.toContain('extractedText: text');
+    expect(buildPointCode).not.toContain('extractedText');
+    expect(upsertBody).not.toContain('extractedText');
   });
 
   it('returns an app-compatible async ingestion start result contract from the webhook response', () => {

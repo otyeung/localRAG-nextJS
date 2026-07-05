@@ -27,6 +27,7 @@ export type SystemHealthDto = {
 type N8nSnapshot = {
   healthy: boolean;
   workflowCount: number;
+  reason?: 'missing_api_key' | 'unavailable';
 };
 
 type Awaitable<T> = T | Promise<T>;
@@ -238,12 +239,24 @@ async function defaultCheckDatabase() {
 }
 
 async function defaultGetN8nStatus(): Promise<N8nSnapshot> {
+  const baseUrl = readUrlEnv('N8N_BASE_URL');
+  const apiKey = readTrimmedEnv('N8N_API_KEY');
+
+  if (baseUrl && !apiKey) {
+    return {
+      healthy: false,
+      workflowCount: 0,
+      reason: 'missing_api_key',
+    };
+  }
+
   const config = readN8nHealthConfig();
 
   if (!config) {
     return {
       healthy: false,
       workflowCount: 0,
+      reason: 'unavailable',
     };
   }
 
@@ -270,6 +283,7 @@ async function defaultGetN8nStatus(): Promise<N8nSnapshot> {
     return {
       healthy: false,
       workflowCount: 0,
+      reason: 'unavailable',
     };
   }
 }
@@ -412,13 +426,16 @@ export class HealthService {
 
     try {
       const snapshot = await this.getN8nStatus();
+      const missingApiKey = Boolean(readUrlEnv('N8N_BASE_URL')) && !readTrimmedEnv('N8N_API_KEY');
 
       return {
         name: 'n8n',
         status: snapshot.healthy ? 'healthy' : 'degraded',
         message: snapshot.healthy
           ? `n8n is healthy with ${snapshot.workflowCount} active workflows.`
-          : 'n8n API unavailable or workflows could not be listed.',
+          : snapshot.reason === 'missing_api_key' || missingApiKey
+            ? 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.'
+            : 'n8n API unavailable or workflows could not be listed.',
         checkedAt,
         latencyMs: roundLatency(startedAt),
       };

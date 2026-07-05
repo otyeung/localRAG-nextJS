@@ -8,7 +8,11 @@ const rawEnvSchema = z.object({
   OPENAI_EMBEDDING_MODEL: z.string().min(1).default('text-embedding-3-small'),
   DATABASE_URL: z.string().url(),
   N8N_BASE_URL: z.string().url(),
-  N8N_API_KEY: z.string().min(1),
+  N8N_API_KEY: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : null)),
   N8N_WEBHOOK_SECRET: z.string().min(1),
   N8N_TIMEOUT: z.coerce.number().int().positive().default(30_000),
   N8N_RETRY_COUNT: z.coerce.number().int().min(0).max(10).default(3),
@@ -34,7 +38,7 @@ export type AppEnv = {
   };
   n8n: {
     baseUrl: string;
-    apiKey: string;
+    apiKey: string | null;
     webhookSecret: string;
     timeoutMs: number;
     retryCount: number;

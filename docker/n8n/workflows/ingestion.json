@@ -110,7 +110,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n        extractedText: text,\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
+        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
       }
     },
     {
@@ -150,7 +150,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    extractedText: source.extractedText,\n    vector: embedding,\n  },\n};"
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: `${source.documentId}:${source.chunkIndex}`,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
       }
     },
     {

@@ -324,12 +324,38 @@ describe('HealthService', () => {
         expect.objectContaining({
           name: 'n8n',
           status: 'degraded',
-          message: 'n8n API unavailable or workflows could not be listed.',
+          message: 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.',
         }),
         expect.objectContaining({
           name: 'openai',
           status: 'healthy',
           message: 'OpenAI model "gpt-4.1-mini" is configured.',
+        }),
+      ]),
+    );
+  });
+
+  it('reports manual action required when the n8n api key is missing', async () => {
+    applyRequiredEnv({
+      N8N_API_KEY: '',
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.status).toBe('degraded');
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'degraded',
+          message: 'n8n REST API key is not configured; complete the manual n8n setup to enable API-backed health checks.',
         }),
       ]),
     );

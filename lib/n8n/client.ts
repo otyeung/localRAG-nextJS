@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { env } from '@/lib/config/env';
 import { logger } from '@/lib/logger/logger';
 import { createN8nHeaders } from '@/lib/n8n/auth';
-import { N8nError, toN8nError } from '@/lib/n8n/errors';
+import { N8nConfigurationError, N8nError, toN8nError } from '@/lib/n8n/errors';
 import { resolveN8nUrl } from '@/lib/n8n/url';
 
 const transientStatusCodes = new Set([408, 429]);
@@ -14,7 +14,7 @@ type FetchFn = typeof fetch;
 
 export type N8nClientOptions = {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string | null;
   bearerToken?: string;
   webhookSecret?: string;
   timeoutMs: number;
@@ -94,6 +94,8 @@ export class N8nClient {
       });
     }
 
+    this.ensureRequiredConfiguration(input.path);
+
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.options.retryCount; attempt += 1) {
@@ -127,6 +129,21 @@ export class N8nClient {
 
     this.recordFailure(lastError, input, this.options.retryCount + 1);
     throw toN8nError(lastError, 'n8n request failed.');
+  }
+
+  private ensureRequiredConfiguration(path: string): void {
+    if (isWebhookPath(path)) {
+      return;
+    }
+
+    if (typeof this.options.apiKey === 'string' && this.options.apiKey.trim().length > 0) {
+      return;
+    }
+
+    throw new N8nConfigurationError('n8n API key is not configured.', {
+      configurationKey: 'N8N_API_KEY',
+      path,
+    });
   }
 
   private recordFailure(

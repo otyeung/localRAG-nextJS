@@ -9,6 +9,13 @@ export class N8nError extends AppError {
   }
 }
 
+export class N8nConfigurationError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super('BAD_REQUEST', message, details);
+    this.name = 'N8nConfigurationError';
+  }
+}
+
 export function toN8nError(error: unknown, fallbackMessage: string): N8nError {
   if (error instanceof N8nError) {
     return error;

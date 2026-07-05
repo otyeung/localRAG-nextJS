@@ -47,6 +47,29 @@ describe('N8nClient', () => {
     expect(fetchMock.mock.calls[0][1].headers['x-n8n-webhook-secret']).toBeUndefined();
   });
 
+  it('rejects rest api requests with a configuration error when the n8n api key is missing', async () => {
+    const fetchMock = vi.fn();
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: '',
+      timeoutMs: 1000,
+      retryCount: 1,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.get('/api/v1/health', { requestId: 'req_123' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'n8n API key is not configured.',
+      details: {
+        configurationKey: 'N8N_API_KEY',
+        path: '/api/v1/health',
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('preserves base path prefixes when resolving request urls', async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
 
@@ -254,5 +277,24 @@ describe('N8nClient', () => {
 
     expect(fetchMock.mock.calls[0][1].headers['x-n8n-webhook-secret']).toBe('internal-secret');
     expect(fetchMock.mock.calls[1][1].headers['x-n8n-webhook-secret']).toBeUndefined();
+  });
+
+  it('allows webhook requests to run without an n8n api key', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ ok: true }));
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: '',
+      webhookSecret: 'internal-secret',
+      timeoutMs: 1000,
+      retryCount: 0,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.post('/webhook/retrieval', { body: { query: 'hello' } })).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers['X-N8N-API-KEY']).toBeUndefined();
+    expect(fetchMock.mock.calls[0][1].headers['x-n8n-webhook-secret']).toBe('internal-secret');
   });
 });
