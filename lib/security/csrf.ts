@@ -16,11 +16,13 @@ export function assertSameOrigin(request: Request): void {
 
   const requestUrl = new URL(request.url);
   const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
-  const effectiveOrigin = `${forwardedProto ?? requestUrl.protocol.slice(0, -1)}://${host}`;
+  const requestProto = forwardedProto ?? requestUrl.protocol.slice(0, -1);
   let requestOrigin: string;
+  let effectiveOrigin: string;
 
   try {
     requestOrigin = new URL(origin).origin;
+    effectiveOrigin = new URL(`${requestProto}://${host}`).origin;
   } catch {
     throw new AppError('FORBIDDEN', 'Cross-origin mutation rejected.');
   }

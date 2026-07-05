@@ -4,6 +4,19 @@ import { AppError } from '@/lib/http/api-errors';
 import { assertSameOrigin } from '@/lib/security/csrf';
 
 describe('assertSameOrigin', () => {
+  it('allows an explicit default port when the origin matches the effective request origin', () => {
+    const request = new Request('https://app.example.com/api/upload', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com:443',
+        origin: 'https://app.example.com',
+        'x-forwarded-proto': 'https',
+      },
+    });
+
+    expect(() => assertSameOrigin(request)).not.toThrow();
+  });
+
   it('rejects a mismatched scheme even when the host matches', () => {
     const request = new Request('https://app.example.com/api/upload', {
       method: 'POST',
@@ -15,18 +28,5 @@ describe('assertSameOrigin', () => {
     });
 
     expect(() => assertSameOrigin(request)).toThrow(AppError);
-  });
-
-  it('allows the effective origin when scheme and host match', () => {
-    const request = new Request('https://app.example.com/api/upload', {
-      method: 'POST',
-      headers: {
-        host: 'app.example.com',
-        origin: 'https://app.example.com',
-        'x-forwarded-proto': 'https',
-      },
-    });
-
-    expect(() => assertSameOrigin(request)).not.toThrow();
   });
 });
