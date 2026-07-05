@@ -817,9 +817,29 @@ describe('document services', () => {
   });
 
   it('records reindex audit logging in the same transaction as workflow creation without downgrading the document', async () => {
+    const queueTx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
+      },
+      document: {
+        update: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          status: DocumentStatus.INGESTING,
+        }),
+        findFirst: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
     const tx = {
       workflowExecution: {
-        create: vi.fn().mockResolvedValue({
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -858,7 +878,10 @@ describe('document services', () => {
       auditLog: {
         create: vi.fn(),
       },
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const ingestionService = {
       startDocumentIngestion: vi.fn().mockResolvedValue({
@@ -879,14 +902,24 @@ describe('document services', () => {
       externalExecutionId: 'exec_123',
       status: 'RUNNING',
     });
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(tx.workflowExecution.create).toHaveBeenCalledWith({
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(queueTx.workflowExecution.create).toHaveBeenCalledWith({
       data: {
         id: expect.any(String),
         userId: 'user_1',
         documentId: 'document_1',
         uploadId: 'upload_1',
         workflowKey: 'ingestion',
+        status: WorkflowStatus.QUEUED,
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+        },
+      },
+    });
+    expect(tx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: {
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
         metadata: {
@@ -976,9 +1009,14 @@ describe('document services', () => {
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
   it('does not leave unrecoverable initial-state reindex rows when start-failure audit persistence fails', async () => {
-    const tx = {
+    const queueTx = {
       workflowExecution: {
-        create: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
       },
       document: {
         update: vi.fn(),
@@ -987,10 +1025,25 @@ describe('document services', () => {
         create: vi.fn(),
       },
     };
+    const tx = {
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(new Error('audit write failed')),
+      },
+    };
     const db = {
       workflowExecution: {
         create: vi.fn(),
-        update: vi.fn(),
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.ERROR,
+          externalExecutionId: null,
+        }),
       },
       document: {
         findFirst: vi.fn().mockResolvedValue({
@@ -1006,9 +1059,12 @@ describe('document services', () => {
         }),
       },
       auditLog: {
-        create: vi.fn().mockRejectedValue(new Error('audit write failed')),
+        create: vi.fn(),
       },
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const service = new DocumentService({
       db: db as never,
@@ -1019,15 +1075,43 @@ describe('document services', () => {
 
     await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toThrow('audit write failed');
 
-    expect(db.workflowExecution.create).not.toHaveBeenCalled();
-    expect(tx.workflowExecution.create).not.toHaveBeenCalled();
+    expect(queueTx.workflowExecution.create).toHaveBeenCalledOnce();
+    expect(tx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: {
+        status: WorkflowStatus.ERROR,
+        errorMessage: 'n8n unavailable',
+      },
+    });
+    expect(db.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: {
+        status: WorkflowStatus.ERROR,
+        errorMessage: 'n8n unavailable',
+      },
+    });
   });
   it('preserves accepted reindex executions when post-start persistence fails', async () => {
     const persistenceError = new Error('audit write failed');
-    const tx = {
+    const queueTx = {
       workflowExecution: {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const tx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1042,7 +1126,7 @@ describe('document services', () => {
     };
     const reconciliationTx = {
       workflowExecution: {
-        create: vi.fn().mockResolvedValue({
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1079,6 +1163,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
         .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
@@ -1100,14 +1185,10 @@ describe('document services', () => {
       code: 'INTERNAL_ERROR',
     });
 
-    expect(db.$transaction).toHaveBeenCalledTimes(2);
-    expect(reconciliationTx.workflowExecution.create).toHaveBeenCalledWith({
+    expect(db.$transaction).toHaveBeenCalledTimes(3);
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
       data: {
-        id: expect.any(String),
-        userId: 'user_1',
-        documentId: 'document_1',
-        uploadId: 'upload_1',
-        workflowKey: 'ingestion',
         externalExecutionId: 'exec_123',
         status: WorkflowStatus.RUNNING,
         metadata: {
@@ -1125,16 +1206,36 @@ describe('document services', () => {
       }),
     );
   });
-  it('records an audit event when reindex ingestion fails to start before local workflow rows are created', async () => {
-    const tx = {
+  it('records an audit event when reindex ingestion fails to start after queueing the local workflow row', async () => {
+    const queueTx = {
       workflowExecution: {
-        create: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
       },
       document: {
         update: vi.fn(),
       },
       auditLog: {
         create: vi.fn(),
+      },
+    };
+    const tx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.ERROR,
+          externalExecutionId: null,
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
       },
     };
     const db = {
@@ -1158,7 +1259,10 @@ describe('document services', () => {
       auditLog: {
         create: vi.fn().mockResolvedValue(undefined),
       },
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const service = new DocumentService({
       db: db as never,
@@ -1171,8 +1275,8 @@ describe('document services', () => {
       code: 'UPSTREAM_ERROR',
     });
 
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(db.auditLog.create).toHaveBeenCalledWith({
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
         action: 'document.reindex_start_failed',
@@ -1189,10 +1293,25 @@ describe('document services', () => {
   });
   it('records an audit event when reindex reconciliation is required after ingestion starts', async () => {
     const persistenceError = new Error('audit write failed');
-    const tx = {
+    const queueTx = {
       workflowExecution: {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const tx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1207,7 +1326,7 @@ describe('document services', () => {
     };
     const reconciliationTx = {
       workflowExecution: {
-        create: vi.fn().mockResolvedValue({
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1244,6 +1363,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
         .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
@@ -1282,10 +1402,25 @@ describe('document services', () => {
   });
   it('preserves reindex reconciliation state when the follow-up audit write fails', async () => {
     const persistenceError = new Error('audit write failed');
-    const tx = {
+    const queueTx = {
       workflowExecution: {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const tx = {
+      workflowExecution: {
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1300,7 +1435,7 @@ describe('document services', () => {
     };
     const reconciliationTx = {
       workflowExecution: {
-        create: vi.fn().mockResolvedValue({
+        update: vi.fn().mockResolvedValue({
           id: 'workflow_1',
           status: WorkflowStatus.RUNNING,
           externalExecutionId: 'exec_123',
@@ -1337,6 +1472,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof queueTx) => Promise<unknown>) => callback(queueTx))
         .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
@@ -1357,8 +1493,188 @@ describe('document services', () => {
       code: 'INTERNAL_ERROR',
     });
 
-    expect(reconciliationTx.workflowExecution.create).toHaveBeenCalledOnce();
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledOnce();
     expect(db.auditLog.create).toHaveBeenCalledOnce();
+  });
+  it('blocks an immediate second reindex after accepted start when post-start persistence fails', async () => {
+    const persistenceError = new Error('audit write failed');
+    const sharedWorkflow = {
+      id: 'workflow_queued',
+      userId: 'user_1',
+      documentId: 'document_1',
+      uploadId: 'upload_1',
+      workflowKey: 'ingestion',
+      status: WorkflowStatus.QUEUED,
+      externalExecutionId: null as string | null,
+      metadata: {
+        operation: 'reindex',
+        previousDocumentStatus: DocumentStatus.READY,
+      },
+    };
+    const initialTx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockImplementation(async ({ data }: { data: typeof sharedWorkflow }) => {
+          Object.assign(sharedWorkflow, {
+            ...data,
+            externalExecutionId: data.externalExecutionId ?? null,
+          });
+          return { ...sharedWorkflow };
+        }),
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const failedPostStartTx = {
+      workflowExecution: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn().mockResolvedValue({
+          ...sharedWorkflow,
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          metadata: {
+            ...sharedWorkflow.metadata,
+            workflowId: 'workflow_123',
+          },
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(persistenceError),
+      },
+    };
+    const reconciliationTx = {
+      workflowExecution: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn().mockImplementation(async ({ data }: { data: { status: WorkflowStatus; externalExecutionId: string; metadata: typeof sharedWorkflow.metadata & { workflowId: string; reconciliationRequired: true; localPersistenceError: string } } }) => {
+          Object.assign(sharedWorkflow, {
+            status: data.status,
+            externalExecutionId: data.externalExecutionId,
+            metadata: data.metadata,
+          });
+          return { ...sharedWorkflow };
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const conflictTx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockImplementation(async () => ({
+          id: sharedWorkflow.id,
+          status: sharedWorkflow.status,
+          externalExecutionId: sharedWorkflow.externalExecutionId,
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const db = {
+      workflowExecution: {
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.READY,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof initialTx) => Promise<unknown>) => callback(initialTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof failedPostStartTx) => Promise<unknown>) =>
+          callback(failedPostStartTx),
+        )
+        .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
+          callback(reconciliationTx),
+        )
+        .mockImplementationOnce(async (callback: (transaction: typeof conflictTx) => Promise<unknown>) => callback(conflictTx)),
+    };
+    const ingestionService = {
+      startDocumentIngestion: vi.fn().mockResolvedValue({
+        executionId: 'exec_123',
+        workflowId: 'workflow_123',
+        status: 'running',
+      }),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: ingestionService as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex_1')).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex_2')).rejects.toMatchObject({
+      code: 'CONFLICT',
+      details: {
+        reason: 'ACTIVE_WORKFLOW',
+        workflowExecutionId: sharedWorkflow.id,
+        workflowStatus: WorkflowStatus.RUNNING,
+      },
+    });
+
+    expect(initialTx.workflowExecution.create).toHaveBeenCalledWith({
+      data: {
+        id: expect.any(String),
+        userId: 'user_1',
+        documentId: 'document_1',
+        uploadId: 'upload_1',
+        workflowKey: 'ingestion',
+        status: WorkflowStatus.QUEUED,
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+        },
+      },
+    });
+    expect(reconciliationTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: {
+        externalExecutionId: 'exec_123',
+        status: WorkflowStatus.RUNNING,
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+          workflowId: 'workflow_123',
+          reconciliationRequired: true,
+          localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(ingestionService.startDocumentIngestion).toHaveBeenCalledTimes(1);
   });
   it('reconciles resource statuses for accepted workflows that already completed remotely', async () => {
     const reconciliationTx = {

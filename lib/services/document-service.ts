@@ -236,6 +236,75 @@ export class DocumentService {
     };
   }
 
+  private async createQueuedReindexWorkflow(
+    transaction: DocumentTransactionDb,
+    input: {
+      workflowExecutionId: string;
+      userId: string;
+      documentId: string;
+      uploadId: string;
+      previousDocumentStatus: DocumentStatus;
+    },
+  ): Promise<ActiveWorkflowSummary> {
+    const workflow = await transaction.workflowExecution.create({
+      data: {
+        id: input.workflowExecutionId,
+        userId: input.userId,
+        documentId: input.documentId,
+        uploadId: input.uploadId,
+        workflowKey: 'ingestion',
+        status: WorkflowStatus.QUEUED,
+        metadata: buildReindexWorkflowMetadata(input.previousDocumentStatus),
+      },
+    });
+
+    return {
+      id: workflow.id,
+      status: workflow.status,
+      externalExecutionId: workflow.externalExecutionId,
+    };
+  }
+
+  private async persistAcceptedReindexWorkflow(
+    transaction: DocumentTransactionDb,
+    input: {
+      workflowExecutionId: string;
+      documentId: string;
+      previousDocumentStatus: DocumentStatus;
+      nextWorkflowStatus: WorkflowStatus;
+      startResult: N8nWorkflowStartResult;
+      localPersistenceError?: string;
+    },
+  ): Promise<ActiveWorkflowSummary> {
+    const workflow = await transaction.workflowExecution.update({
+      where: { id: input.workflowExecutionId },
+      data: {
+        externalExecutionId: input.startResult.executionId,
+        status: input.nextWorkflowStatus,
+        metadata: buildReindexWorkflowMetadata(input.previousDocumentStatus, {
+          workflowId: input.startResult.workflowId ?? undefined,
+          reconciliationRequired: input.localPersistenceError ? true : undefined,
+          localPersistenceError: input.localPersistenceError,
+        }),
+      },
+    });
+
+    if (input.nextWorkflowStatus === WorkflowStatus.SUCCESS) {
+      await transaction.document.update({
+        where: { id: input.documentId },
+        data: {
+          status: mapWorkflowStatusToDocumentStatus(input.nextWorkflowStatus),
+        },
+      });
+    }
+
+    return {
+      id: workflow.id,
+      status: workflow.status,
+      externalExecutionId: workflow.externalExecutionId,
+    };
+  }
+
   async listDocuments(userId: string, query: DocumentQuery): Promise<DocumentListResult> {
     const page = Math.max(query.page ?? 1, 1);
     const pageSize = Math.min(Math.max(query.pageSize ?? 20, 1), 100);
@@ -377,78 +446,110 @@ export class DocumentService {
 
     const workflowExecutionId = createResourceId();
 
-    let startResult: N8nWorkflowStartResult | null = null;
-    let startFailureMessage: string | null = null;
+    await this.transactionRunner.$transaction(
+      async (transaction: DocumentTransactionDb) => {
+        await this.lockDocumentForReindex(transaction, document.id);
+
+        const activeWorkflow = await this.findActiveDocumentWorkflow(transaction, userId, document.id);
+        if (activeWorkflow) {
+          throw buildActiveWorkflowConflict(document.id, activeWorkflow);
+        }
+
+        await this.createQueuedReindexWorkflow(transaction, {
+          workflowExecutionId,
+          userId,
+          documentId: document.id,
+          uploadId: document.uploadId,
+          previousDocumentStatus: document.status,
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    let startResult: N8nWorkflowStartResult;
     try {
-      const updatedWorkflow = await this.transactionRunner.$transaction(
-        async (transaction: DocumentTransactionDb) => {
-          await this.lockDocumentForReindex(transaction, document.id);
+      startResult = await this.ingestionService.startDocumentIngestion({
+        documentId: document.id,
+        uploadId: document.uploadId,
+        filePath: document.storagePath,
+        fileName: document.originalFilename,
+        mimeType: document.mimeType,
+        requestId,
+      });
+    } catch (error) {
+      const startFailureMessage = errorMessage(error);
 
-          const activeWorkflow = await this.findActiveDocumentWorkflow(transaction, userId, document.id);
-          if (activeWorkflow) {
-            throw buildActiveWorkflowConflict(document.id, activeWorkflow);
-          }
-
-          try {
-            startResult = await this.ingestionService.startDocumentIngestion({
-              documentId: document.id,
-              uploadId: document.uploadId,
-              filePath: document.storagePath,
-              fileName: document.originalFilename,
-              mimeType: document.mimeType,
-              requestId,
-            });
-          } catch (error) {
-            startFailureMessage = errorMessage(error);
-            throw error;
-          }
-
-          const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
-          const updatedWorkflow = await transaction.workflowExecution.create({
+      try {
+        await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+          await transaction.workflowExecution.update({
+            where: { id: workflowExecutionId },
             data: {
-              id: workflowExecutionId,
-              userId,
-              documentId: document.id,
-              uploadId: document.uploadId,
-              workflowKey: 'ingestion',
-              externalExecutionId: startResult.executionId,
-              status: nextWorkflowStatus,
-              metadata: buildReindexWorkflowMetadata(document.status, {
-                workflowId: startResult.workflowId ?? undefined,
-              }),
+              status: WorkflowStatus.ERROR,
+              errorMessage: startFailureMessage,
             },
           });
-
-          if (nextWorkflowStatus === WorkflowStatus.SUCCESS) {
-            await transaction.document.update({
-              where: { id: document.id },
-              data: {
-                status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
-              },
-            });
-          }
 
           await transaction.auditLog.create({
             data: {
               userId,
-              action: 'document.reindex_requested',
+              action: 'document.reindex_start_failed',
               entityType: 'document',
               entityId: document.id,
               requestId,
               metadata: {
                 workflowExecutionId,
-                externalExecutionId: startResult.executionId,
                 uploadId: document.uploadId,
+                error: startFailureMessage,
               },
             },
           });
+        });
+      } catch (persistenceError) {
+        await this.db.workflowExecution.update({
+          where: { id: workflowExecutionId },
+          data: {
+            status: WorkflowStatus.ERROR,
+            errorMessage: startFailureMessage,
+          },
+        });
 
-          return updatedWorkflow;
-        },
-        {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        },
-      );
+        throw persistenceError;
+      }
+
+      throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
+    }
+
+    const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(startResult.status);
+
+    try {
+      const updatedWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
+        const updatedWorkflow = await this.persistAcceptedReindexWorkflow(transaction, {
+          workflowExecutionId,
+          documentId: document.id,
+          previousDocumentStatus: document.status,
+          nextWorkflowStatus,
+          startResult,
+        });
+
+        await transaction.auditLog.create({
+          data: {
+            userId,
+            action: 'document.reindex_requested',
+            entityType: 'document',
+            entityId: document.id,
+            requestId,
+            metadata: {
+              workflowExecutionId,
+              externalExecutionId: startResult.executionId,
+              uploadId: document.uploadId,
+            },
+          },
+        });
+
+        return updatedWorkflow;
+      });
 
       return {
         workflowExecutionId: updatedWorkflow.id,
@@ -456,59 +557,17 @@ export class DocumentService {
         status: updatedWorkflow.status,
       };
     } catch (error) {
-      if (startFailureMessage) {
-        await this.db.auditLog.create({
-          data: {
-            userId,
-            action: 'document.reindex_start_failed',
-            entityType: 'document',
-            entityId: document.id,
-            requestId,
-            metadata: {
-              workflowExecutionId,
-              uploadId: document.uploadId,
-              error: startFailureMessage,
-            },
-          },
-        });
-
-        throw error instanceof AppError ? error : new AppError('UPSTREAM_ERROR', 'Unable to start document ingestion.');
-      }
-
-      if (!startResult) {
-        throw error;
-      }
-
-      const acceptedStartResult = startResult as N8nWorkflowStartResult;
-      const nextWorkflowStatus = mapN8nStatusToWorkflowStatus(acceptedStartResult.status);
       const localPersistenceError = errorMessage(error);
-      await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {
-        await transaction.workflowExecution.create({
-          data: {
-            id: workflowExecutionId,
-            userId,
-            documentId: document.id,
-            uploadId: document.uploadId,
-            workflowKey: 'ingestion',
-            externalExecutionId: acceptedStartResult.executionId,
-            status: nextWorkflowStatus,
-            metadata: buildReindexWorkflowMetadata(document.status, {
-              workflowId: acceptedStartResult.workflowId ?? undefined,
-              reconciliationRequired: true,
-              localPersistenceError,
-            }),
-          },
-        });
-
-        if (nextWorkflowStatus === WorkflowStatus.SUCCESS) {
-          await transaction.document.update({
-            where: { id: document.id },
-            data: {
-              status: mapWorkflowStatusToDocumentStatus(nextWorkflowStatus),
-            },
-          });
-        }
-      });
+      const reconciledWorkflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) =>
+        this.persistAcceptedReindexWorkflow(transaction, {
+          workflowExecutionId,
+          documentId: document.id,
+          previousDocumentStatus: document.status,
+          nextWorkflowStatus,
+          startResult,
+          localPersistenceError,
+        }),
+      );
 
       try {
         await this.db.auditLog.create({
@@ -520,7 +579,7 @@ export class DocumentService {
             requestId,
             metadata: {
               workflowExecutionId,
-              externalExecutionId: acceptedStartResult.executionId,
+              externalExecutionId: reconciledWorkflow.externalExecutionId,
               uploadId: document.uploadId,
               error: localPersistenceError,
             },
