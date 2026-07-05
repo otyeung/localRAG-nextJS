@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+import { AppError } from '@/lib/http/api-errors';
+
 const routeMocks = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
   enforcePreProvisionRouteRateLimit: vi.fn(),
@@ -447,6 +449,45 @@ describe('documents routes', () => {
       workflowExecutionId: 'workflow_2',
       status: 'RUNNING',
       reconciliationRequired: false,
+    });
+  });
+
+  it('returns a structured conflict when an active document workflow already exists', async () => {
+    routeMocks.requestReindex.mockRejectedValueOnce(
+      new AppError('CONFLICT', 'A document ingestion workflow is already active for this document.', {
+        reason: 'ACTIVE_WORKFLOW',
+        documentId: 'document_1',
+        workflowExecutionId: 'workflow_active',
+        workflowStatus: 'RUNNING',
+      }),
+    );
+
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      method: 'PATCH',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_document_reindex_conflict',
+      },
+    });
+
+    const response = await reindexDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'CONFLICT',
+        message: 'A document ingestion workflow is already active for this document.',
+        requestId: 'req_document_reindex_conflict',
+        details: {
+          reason: 'ACTIVE_WORKFLOW',
+          documentId: 'document_1',
+          workflowExecutionId: 'workflow_active',
+          workflowStatus: 'RUNNING',
+        },
+      },
     });
   });
 

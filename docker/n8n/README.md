@@ -12,7 +12,7 @@ They are exported as active workflows so a fresh `docker compose up` registers t
 
 - `nextjs` writes uploaded files to `/data/uploads`.
 - `n8n` mounts the same shared `app_data` volume at `/data` and reads the absolute `filePath` passed by the app.
-- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_VECTOR_SIZE`, `QDRANT_DISTANCE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`, and `N8N_WEBHOOK_SECRET` are provided through container environment variables.
+- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_VECTOR_SIZE`, `QDRANT_DISTANCE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`, `N8N_WEBHOOK_SECRET`, and `N8N_EDITOR_BASE_URL` are provided through container environment variables.
 - `qdrant-init` verifies or creates the configured collection before `n8n` and `nextjs` start.
 - `n8n` and `qdrant` stay internal to the Docker network by default; only `nextjs` is published to the host.
 - Next.js talks to n8n over the internal Docker network at `http://n8n:5678`; workflow URLs stay server-side and each webhook request must include the internal `x-n8n-webhook-secret` header.
@@ -26,7 +26,7 @@ Because the header is resolved server-side from container environment variables,
 
 ## Required operator bootstrap
 
-1. Start the stack with a temporary localhost-only n8n editor binding (for example via a one-off Compose override that maps `127.0.0.1:5678:5678`).
+1. Start the stack with the localhost-only editor override: `docker compose -f docker-compose.yml -f docker-compose.n8n-editor.yml up -d`.
 2. Open n8n and generate an API key from **Settings → n8n API**.
 3. Export that value as `N8N_API_KEY` in your Compose environment and restart `nextjs` (or recreate the container).
 
@@ -34,4 +34,4 @@ Without an operator-created `N8N_API_KEY`, the app can still invoke internal web
 
 ## Host access
 
-`docker compose up` does not publish `n8n` or `qdrant` ports by default. If you need temporary localhost-only access to the n8n editor for setup, use a one-off compose override or profile that binds `127.0.0.1:5678`, then remove it after setup.
+`docker compose up` does not publish `n8n` or `qdrant` ports by default. When you need the n8n editor on the host, layer in `docker-compose.n8n-editor.yml`, which binds `127.0.0.1:5678:5678` and keeps `N8N_EDITOR_BASE_URL=http://localhost:5678` for the browser-facing bootstrap flow. Internal Next.js webhook and REST calls still use `http://n8n:5678` on the Docker network.

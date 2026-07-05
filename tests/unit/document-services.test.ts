@@ -711,6 +711,9 @@ describe('document services', () => {
             fileHash: 'hash_1',
             storagePath: '/uploads/quarterly-report.pdf',
             metadata: null,
+            _count: {
+              chunks: 0,
+            },
             createdAt: new Date('2026-01-01T00:00:00.000Z'),
             updatedAt: new Date('2026-01-02T00:00:00.000Z'),
             deletedAt: null,
@@ -729,6 +732,9 @@ describe('document services', () => {
           fileHash: 'hash_1',
           storagePath: '/uploads/quarterly-report.pdf',
           metadata: null,
+          _count: {
+            chunks: 0,
+          },
           createdAt: new Date('2026-01-01T00:00:00.000Z'),
           updatedAt: new Date('2026-01-02T00:00:00.000Z'),
           deletedAt: null,
@@ -906,7 +912,81 @@ describe('document services', () => {
       },
     });
   });
+  it('rejects a reindex request when the document already has an active ingestion workflow', async () => {
+    const tx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_active',
+          status: WorkflowStatus.WAITING,
+          externalExecutionId: 'exec_active',
+        }),
+        create: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const db = {
+      workflowExecution: {
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.READY,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const ingestionService = {
+      startDocumentIngestion: vi.fn(),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: ingestionService as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toMatchObject({
+      code: 'CONFLICT',
+      details: {
+        reason: 'ACTIVE_WORKFLOW',
+        documentId: 'document_1',
+        workflowExecutionId: 'workflow_active',
+        workflowStatus: WorkflowStatus.WAITING,
+      },
+    });
+
+    expect(ingestionService.startDocumentIngestion).not.toHaveBeenCalled();
+    expect(tx.workflowExecution.create).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
   it('does not leave unrecoverable initial-state reindex rows when start-failure audit persistence fails', async () => {
+    const tx = {
+      workflowExecution: {
+        create: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
     const db = {
       workflowExecution: {
         create: vi.fn(),
@@ -928,7 +1008,7 @@ describe('document services', () => {
       auditLog: {
         create: vi.fn().mockRejectedValue(new Error('audit write failed')),
       },
-      $transaction: vi.fn(),
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const service = new DocumentService({
       db: db as never,
@@ -940,10 +1020,26 @@ describe('document services', () => {
     await expect(service.requestReindex('user_1', 'document_1', 'req_reindex')).rejects.toThrow('audit write failed');
 
     expect(db.workflowExecution.create).not.toHaveBeenCalled();
-    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(tx.workflowExecution.create).not.toHaveBeenCalled();
   });
   it('preserves accepted reindex executions when post-start persistence fails', async () => {
     const persistenceError = new Error('audit write failed');
+    const tx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(persistenceError),
+      },
+    };
     const reconciliationTx = {
       workflowExecution: {
         create: vi.fn().mockResolvedValue({
@@ -983,7 +1079,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
-        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
         ),
@@ -1030,6 +1126,17 @@ describe('document services', () => {
     );
   });
   it('records an audit event when reindex ingestion fails to start before local workflow rows are created', async () => {
+    const tx = {
+      workflowExecution: {
+        create: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
     const db = {
       workflowExecution: {
         create: vi.fn(),
@@ -1051,7 +1158,7 @@ describe('document services', () => {
       auditLog: {
         create: vi.fn().mockResolvedValue(undefined),
       },
-      $transaction: vi.fn(),
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const service = new DocumentService({
       db: db as never,
@@ -1064,7 +1171,7 @@ describe('document services', () => {
       code: 'UPSTREAM_ERROR',
     });
 
-    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.$transaction).toHaveBeenCalledOnce();
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
@@ -1082,6 +1189,22 @@ describe('document services', () => {
   });
   it('records an audit event when reindex reconciliation is required after ingestion starts', async () => {
     const persistenceError = new Error('audit write failed');
+    const tx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(persistenceError),
+      },
+    };
     const reconciliationTx = {
       workflowExecution: {
         create: vi.fn().mockResolvedValue({
@@ -1121,7 +1244,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
-        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
         ),
@@ -1159,6 +1282,22 @@ describe('document services', () => {
   });
   it('preserves reindex reconciliation state when the follow-up audit write fails', async () => {
     const persistenceError = new Error('audit write failed');
+    const tx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+        }),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockRejectedValue(persistenceError),
+      },
+    };
     const reconciliationTx = {
       workflowExecution: {
         create: vi.fn().mockResolvedValue({
@@ -1198,7 +1337,7 @@ describe('document services', () => {
       },
       $transaction: vi
         .fn()
-        .mockRejectedValueOnce(persistenceError)
+        .mockImplementationOnce(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx))
         .mockImplementationOnce(async (callback: (transaction: typeof reconciliationTx) => Promise<unknown>) =>
           callback(reconciliationTx),
         ),

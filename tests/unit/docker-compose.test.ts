@@ -17,6 +17,7 @@ type WorkflowConnections = Record<string, { main?: WorkflowConnection[][] }>;
 
 describe('docker compose', () => {
   const compose = readFileSync('docker-compose.yml', 'utf8');
+  const editorOverride = readFileSync('docker-compose.n8n-editor.yml', 'utf8');
   const ingestionWorkflow = JSON.parse(readFileSync('docker/n8n/workflows/ingestion.json', 'utf8')) as {
     active: boolean;
     nodes: WorkflowNode[];
@@ -45,9 +46,20 @@ describe('docker compose', () => {
     expect(compose).toContain('QDRANT_URL=http://qdrant:6333');
   });
 
+  it('defaults the n8n editor base url to localhost for host-side bootstrap while keeping internal webhooks on the service network', () => {
+    expect(compose).toContain('N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5678}');
+    expect(compose).toContain('WEBHOOK_URL: http://n8n:5678/');
+  });
+
   it('keeps n8n and qdrant internal by default', () => {
     expect(compose).not.toContain("'5678:5678'");
     expect(compose).not.toContain("'6333:6333'");
+  });
+
+  it('ships an opt-in localhost-only n8n editor override', () => {
+    expect(editorOverride).toContain('n8n:');
+    expect(editorOverride).toContain("'127.0.0.1:5678:5678'");
+    expect(editorOverride).toContain('N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5678}');
   });
 
   it('bootstraps the Qdrant collection before application services start', () => {
