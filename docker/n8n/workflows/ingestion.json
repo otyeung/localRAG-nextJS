@@ -48,25 +48,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.documentId || !payload.uploadId || !payload.filePath) {\n  throw new Error('ingestion requires documentId, uploadId, and filePath');\n}\nreturn [{ json: {\n  documentId: String(payload.documentId),\n  uploadId: String(payload.uploadId),\n  filePath: String(payload.filePath),\n  fileName: String(payload.fileName ?? payload.filePath.split('/').pop() ?? 'document.pdf'),\n  mimeType: String(payload.mimeType ?? 'application/pdf'),\n  requestId: payload.requestId ? String(payload.requestId) : null,\n} }];"
-      }
-    },
-    {
-      "id": "delete-existing-qdrant-points",
-      "name": "Delete Existing Qdrant Points",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        700,
-        440
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points/delete?wait=true` }}",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\"filter\":{\"must\":[{\"key\":\"documentId\",\"match\":{\"value\": $json.documentId}}]}}",
-        "options": {}
+        "jsCode": "const [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.documentId || !payload.uploadId || !payload.filePath) {\n  throw new Error('ingestion requires documentId, uploadId, and filePath');\n}\nreturn [{ json: {\n  documentId: String(payload.documentId),\n  uploadId: String(payload.uploadId),\n  filePath: String(payload.filePath),\n  fileName: String(payload.fileName ?? payload.filePath.split('/').pop() ?? 'document.pdf'),\n  mimeType: String(payload.mimeType ?? 'application/pdf'),\n  requestId: payload.requestId ? String(payload.requestId) : null,\n  ingestionRunId: crypto.randomUUID(),\n} }];"
       }
     },
     {
@@ -110,7 +92,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
+        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        ingestionRunId: item.json.ingestionRunId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
       }
     },
     {
@@ -151,7 +133,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nreturn {\n  json: {\n    pointId: crypto.randomUUID(),\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nconst seed = `${source.documentId}:${source.chunkIndex}`;\nconst digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));\nconst hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');\nconst pointId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${(((Number.parseInt(hash.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0'))}${hash.slice(18, 20)}-${hash.slice(20, 32)}`;\nreturn {\n  json: {\n    pointId,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    ingestionRunId: source.ingestionRunId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
       }
     },
     {
@@ -168,7 +150,7 @@
         "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points?wait=true` }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"uploadId\":$json.uploadId,\"documentName\":$json.fileName,\"fileName\":$json.fileName,\"mimeType\":$json.mimeType,\"requestId\":$json.requestId,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
+        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"uploadId\":$json.uploadId,\"documentName\":$json.fileName,\"fileName\":$json.fileName,\"mimeType\":$json.mimeType,\"requestId\":$json.requestId,\"ingestionRunId\":$json.ingestionRunId,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
         "options": {}
       }
     },
@@ -199,6 +181,38 @@
         "respondWith": "json",
         "responseBody": "={{ $json }}"
       }
+    },
+    {
+      "id": "prepare-stale-point-cleanup",
+      "name": "Prepare Stale Point Cleanup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Build Qdrant Point').first().json;\nreturn [{ json: {\n  documentId: source.documentId,\n  ingestionRunId: source.ingestionRunId,\n} }];"
+      }
+    },
+    {
+      "id": "delete-stale-qdrant-points",
+      "name": "Delete Stale Qdrant Points",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2380,
+        440
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points/delete?wait=true` }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"filter\":{\"must\":[{\"key\":\"documentId\",\"match\":{\"value\": $json.documentId}}],\"must_not\":[{\"key\":\"ingestionRunId\",\"match\":{\"value\": $json.ingestionRunId}}]}}",
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -222,7 +236,7 @@
             "index": 0
           },
           {
-            "node": "Delete Existing Qdrant Points",
+            "node": "Read PDF From Shared Volume",
             "type": "main",
             "index": 0
           }
@@ -286,7 +300,13 @@
     },
     "Upsert Into Qdrant": {
       "main": [
-        []
+        [
+          {
+            "node": "Prepare Stale Point Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Summarize Result": {
@@ -311,15 +331,20 @@
         ]
       ]
     },
-    "Delete Existing Qdrant Points": {
+    "Prepare Stale Point Cleanup": {
       "main": [
         [
           {
-            "node": "Read PDF From Shared Volume",
+            "node": "Delete Stale Qdrant Points",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Delete Stale Qdrant Points": {
+      "main": [
+        []
       ]
     }
   },

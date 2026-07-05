@@ -26,6 +26,16 @@ services:
       - '6333'
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "(grep ' 0A ' /proc/net/tcp /proc/net/tcp6 2>/dev/null || true) | grep -q ':18BD'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - app-network
 

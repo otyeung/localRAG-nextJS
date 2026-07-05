@@ -61,10 +61,12 @@ describe('docker compose', () => {
     expect(compose).toContain('N8N_WEBHOOK_SECRET');
   });
 
-  it('does not rely on a curl healthcheck inside the Qdrant image', () => {
+  it('defines a Qdrant healthcheck without relying on curl in the image', () => {
     const qdrantBlock = compose.match(/\n  qdrant:\n([\s\S]*?)\n  qdrant-init:/)?.[1] ?? '';
 
-    expect(qdrantBlock).not.toContain('healthcheck:');
+    expect(qdrantBlock).toContain('healthcheck:');
+    expect(qdrantBlock).toContain('/proc/net/tcp');
+    expect(qdrantBlock).toContain('18BD');
     expect(qdrantBlock).not.toContain("curl', '--fail', '--silent', 'http://127.0.0.1:6333/readyz");
   });
 
@@ -140,33 +142,43 @@ describe('docker compose', () => {
     expect(summarizeCode).not.toContain('chunkCount');
     expect(summarizeCode).not.toContain('contentPreview');
     expect(branchTargets).toContain('Summarize Result');
-    expect(branchTargets).toContain('Delete Existing Qdrant Points');
+    expect(branchTargets).toContain('Read PDF From Shared Volume');
   });
 
-  it('deletes stale qdrant points for a document before upserting replacement chunks', () => {
-    const deleteNode = getNode(ingestionWorkflow, 'Delete Existing Qdrant Points');
-    const deleteBody = String(deleteNode.parameters?.jsonBody ?? '');
-    const deleteUrl = String(deleteNode.parameters?.url ?? '');
-    const deleteConnections = ingestionWorkflow.connections['Delete Existing Qdrant Points']?.main ?? [];
-    const deleteTargets = deleteConnections.flat().map((connection) => connection.node);
+  it('cleans up stale qdrant points for the same document after upserting the current ingestion run', () => {
+    const cleanupMetadataNode = getNode(ingestionWorkflow, 'Prepare Stale Point Cleanup');
+    const cleanupMetadataCode = String(cleanupMetadataNode.parameters?.jsCode ?? '');
+    const cleanupNode = getNode(ingestionWorkflow, 'Delete Stale Qdrant Points');
+    const cleanupBody = String(cleanupNode.parameters?.jsonBody ?? '');
+    const cleanupUrl = String(cleanupNode.parameters?.url ?? '');
+    const upsertConnections = ingestionWorkflow.connections['Upsert Into Qdrant']?.main ?? [];
+    const upsertTargets = upsertConnections.flat().map((connection) => connection.node);
 
-    expect(deleteUrl).toContain('/points/delete?wait=true');
-    expect(deleteBody).toContain('"filter"');
-    expect(deleteBody).toContain('"documentId"');
-    expect(deleteBody).toContain('"value": $json.documentId');
-    expect(deleteTargets).toContain('Read PDF From Shared Volume');
+    expect(cleanupMetadataCode).toContain("$('Build Qdrant Point').first().json");
+    expect(cleanupMetadataCode).toContain('ingestionRunId');
+    expect(cleanupUrl).toContain('/points/delete?wait=true');
+    expect(cleanupBody).toContain('"documentId"');
+    expect(cleanupBody).toContain('"ingestionRunId"');
+    expect(cleanupBody).toContain('"must_not"');
+    expect(cleanupBody).toContain('"value": $json.ingestionRunId');
+    expect(upsertTargets).toContain('Prepare Stale Point Cleanup');
   });
 
-  it('builds Qdrant point ids as UUIDs while retaining document metadata in the payload', () => {
+  it('builds deterministic valid UUID qdrant point ids and tracks ingestion runs in the payload', () => {
+    const normalizeRequestNode = getNode(ingestionWorkflow, 'Normalize Request');
+    const normalizeRequestCode = String(normalizeRequestNode.parameters?.jsCode ?? '');
     const buildPointNode = getNode(ingestionWorkflow, 'Build Qdrant Point');
     const buildPointCode = String(buildPointNode.parameters?.jsCode ?? '');
     const upsertNode = getNode(ingestionWorkflow, 'Upsert Into Qdrant');
     const upsertBody = String(upsertNode.parameters?.jsonBody ?? '');
 
-    expect(buildPointCode).toContain('crypto.randomUUID()');
-    expect(buildPointCode).not.toContain('`${source.documentId}:${source.chunkIndex}`');
+    expect(normalizeRequestCode).toContain('ingestionRunId: crypto.randomUUID()');
+    expect(buildPointCode).toContain('crypto.subtle.digest');
+    expect(buildPointCode).toContain('seed = `${source.documentId}:${source.chunkIndex}`');
+    expect(buildPointCode).not.toContain('crypto.randomUUID()');
     expect(upsertBody).toContain('"documentId":$json.documentId');
     expect(upsertBody).toContain('"chunkIndex":$json.chunkIndex');
+    expect(upsertBody).toContain('"ingestionRunId":$json.ingestionRunId');
   });
 
   it('preserves retrieval metadata after embedding when building the Qdrant search request', () => {
