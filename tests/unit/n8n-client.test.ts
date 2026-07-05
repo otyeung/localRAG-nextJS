@@ -58,6 +58,43 @@ describe('N8nClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retries transport failures before succeeding', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: 'secret',
+      timeoutMs: 1000,
+      retryCount: 1,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.get('/api/v1/health')).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries abort style failures and surfaces N8nError after attempts', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(
+      new DOMException('The operation was aborted.', 'AbortError'),
+    );
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: 'secret',
+      timeoutMs: 1000,
+      retryCount: 1,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(client.get('/api/v1/health')).rejects.toBeInstanceOf(N8nError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('fetches and combines all active workflow pages', async () => {
     const client = {
       get: vi

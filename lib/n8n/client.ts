@@ -42,12 +42,25 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function isRetryableError(error: unknown): boolean {
-  return error instanceof N8nError &&
-    typeof error.details === 'object' &&
-    error.details !== null &&
-    'status' in error.details
-    ? isRetryableStatus((error.details as { status: number }).status)
-    : false;
+  if (!(error instanceof N8nError) || typeof error.details !== 'object' || error.details === null) {
+    return false;
+  }
+
+  const details = error.details as {
+    status?: number;
+    retryable?: boolean;
+    kind?: string;
+  };
+
+  if (details.retryable) {
+    return true;
+  }
+
+  if (details.kind === 'transport' || details.kind === 'timeout') {
+    return true;
+  }
+
+  return typeof details.status === 'number' ? isRetryableStatus(details.status) : false;
 }
 
 export class N8nClient {
@@ -154,11 +167,7 @@ export class N8nClient {
         signal: AbortSignal.timeout(this.options.timeoutMs),
       });
     } catch (error) {
-      throw new N8nError('n8n request could not be completed.', {
-        cause: error instanceof Error ? error.message : error,
-        path: input.path,
-        requestId: input.requestId,
-      });
+      throw this.toTransportError(error, input);
     }
 
     const payload = await this.readResponseBody(response);
@@ -181,6 +190,23 @@ export class N8nClient {
     } catch (error) {
       throw toN8nError(error, 'n8n returned an invalid response payload.');
     }
+  }
+
+  private toTransportError(error: unknown, input: Pick<N8nRequest<unknown>, 'path' | 'requestId'>): N8nError {
+    const isAbortError =
+      (error instanceof Error && error.name === 'AbortError') ||
+      (error instanceof DOMException && error.name === 'AbortError');
+
+    return new N8nError(
+      isAbortError ? 'n8n request timed out.' : 'n8n request could not be completed.',
+      {
+        kind: isAbortError ? 'timeout' : 'transport',
+        cause: error instanceof Error ? error.message : error,
+        path: input.path,
+        requestId: input.requestId,
+        retryable: true,
+      },
+    );
   }
 
   private async readResponseBody(response: Response): Promise<unknown> {

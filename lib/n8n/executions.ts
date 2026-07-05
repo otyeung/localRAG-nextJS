@@ -29,7 +29,18 @@ export class N8nExecutionService {
       query: { includeData: 'true' },
     });
 
-    return executionResponseSchema.parse(response);
+    try {
+      return executionResponseSchema.parse(response);
+    } catch (error) {
+      if (error instanceof N8nError) {
+        throw error;
+      }
+
+      throw new N8nError('n8n returned an invalid execution payload.', {
+        executionId,
+        cause: error instanceof Error ? error.message : error,
+      });
+    }
   }
 
   async pollExecution(executionId: string): Promise<N8nExecution> {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import { N8nExecutionService } from '@/lib/n8n/executions';
+import { N8nError } from '@/lib/n8n/errors';
 
 describe('N8nExecutionService', () => {
   it('fetches execution details with includeData and normalizes status', async () => {
@@ -61,5 +62,23 @@ describe('N8nExecutionService', () => {
       finished: true,
     });
     expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('wraps malformed execution payloads in N8nError', async () => {
+    const client = {
+      get: vi.fn().mockResolvedValue({
+        id: 'exec_123',
+        workflowId: 'workflow_123',
+        status: 123,
+      }),
+    };
+
+    const service = new N8nExecutionService(client as never);
+
+    await expect(service.getExecution('exec_123')).rejects.toMatchObject({
+      name: 'N8nError',
+      code: 'UPSTREAM_ERROR',
+    });
+    await expect(service.getExecution('exec_123')).rejects.toBeInstanceOf(N8nError);
   });
 });
