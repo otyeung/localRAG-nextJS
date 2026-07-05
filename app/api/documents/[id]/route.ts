@@ -8,23 +8,9 @@ import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { DocumentService, type DocumentDto } from '@/lib/services/document-service';
+import { DocumentService, toPublicDocumentDto } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
-function toPublicDocumentDto(document: DocumentDto) {
-  return {
-    id: document.id,
-    uploadId: document.uploadId,
-    status: document.status,
-    title: document.title,
-    originalFilename: document.originalFilename,
-    mimeType: document.mimeType,
-    fileSizeBytes: document.fileSizeBytes,
-    createdAt: document.createdAt,
-    updatedAt: document.updatedAt,
-    deletedAt: document.deletedAt,
-  };
-}
 const documentRouteParamsSchema = z.object({
   id: z.string().trim().min(1, 'Document id is required.'),
 });

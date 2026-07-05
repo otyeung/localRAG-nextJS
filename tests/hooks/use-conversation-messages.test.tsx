@@ -89,4 +89,87 @@ describe('useConversationMessages', () => {
       },
     ]);
   });
+
+  it('pages through the same-origin messages API until all saved messages are hydrated in ascending order', async () => {
+    const firstPageItems = Array.from({ length: 100 }, (_, index) => ({
+      id: `message_${index + 1}`,
+      role: index % 2 === 0 ? 'USER' : 'ASSISTANT',
+      content: `Message ${index + 1}`,
+      citations: null,
+      toolCalls: null,
+      createdAt: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+      updatedAt: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+    }));
+    const secondPageItems = [
+      {
+        id: 'message_101',
+        role: 'USER',
+        content: 'Message 101',
+        citations: null,
+        toolCalls: null,
+        createdAt: '2026-01-01T00:01:40.000Z',
+        updatedAt: '2026-01-01T00:01:40.000Z',
+      },
+      {
+        id: 'message_102',
+        role: 'ASSISTANT',
+        content: 'Message 102',
+        citations: null,
+        toolCalls: null,
+        createdAt: '2026-01-01T00:01:41.000Z',
+        updatedAt: '2026-01-01T00:01:41.000Z',
+      },
+    ];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (input === '/api/messages?conversationId=conversation_paginated&page=1&pageSize=100&order=asc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: firstPageItems,
+              total: 102,
+              page: 1,
+              pageSize: 100,
+              order: 'asc',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (input === '/api/messages?conversationId=conversation_paginated&page=2&pageSize=100&order=asc') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              items: secondPageItems,
+              total: 102,
+              page: 2,
+              pageSize: 100,
+              order: 'asc',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+
+    const { result } = renderHook(() => useConversationMessages('conversation_paginated'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, '/api/messages?conversationId=conversation_paginated&page=1&pageSize=100&order=asc', undefined);
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/messages?conversationId=conversation_paginated&page=2&pageSize=100&order=asc', undefined);
+    expect(result.current.data).toHaveLength(102);
+    expect(result.current.data?.[0]).toMatchObject({
+      id: 'message_1',
+      role: 'user',
+    });
+    expect(result.current.data?.[101]).toMatchObject({
+      id: 'message_102',
+      role: 'assistant',
+    });
+  });
 });

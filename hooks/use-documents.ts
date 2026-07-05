@@ -10,6 +10,7 @@ export type DocumentRecord = {
   originalFilename: string;
   mimeType: string;
   fileSizeBytes: number;
+  chunkCount: number;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -130,11 +131,14 @@ export function useDocuments({
     },
   });
 
-  const workflowsByDocumentId = new Map(
-    (workflowsQuery.data?.items ?? [])
-      .filter((workflow) => workflow.documentId)
-      .map((workflow) => [workflow.documentId as string, workflow]),
-  );
+  const workflowsByDocumentId = new Map<string, WorkflowRecord>();
+  for (const workflow of workflowsQuery.data?.items ?? []) {
+    if (!workflow.documentId || workflowsByDocumentId.has(workflow.documentId)) {
+      continue;
+    }
+
+    workflowsByDocumentId.set(workflow.documentId, workflow);
+  }
 
   return {
     ...documentsQuery,

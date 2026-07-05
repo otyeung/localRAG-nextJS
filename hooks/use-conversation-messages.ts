@@ -4,6 +4,9 @@ import { useQuery } from '@tanstack/react-query';
 
 import { toChatUiMessages, type ChatUiMessage, type PublicMessageRecord } from '@/lib/chat/public-message-ui';
 
+const MESSAGE_PAGE_SIZE = 100;
+const MAX_MESSAGE_PAGES = 1_000;
+
 type PublicMessagesPayload = {
   items: PublicMessageRecord[];
   total: number;
@@ -33,15 +36,31 @@ export function useConversationMessages(conversationId: string | null) {
     queryKey: ['messages', conversationId],
     enabled: Boolean(conversationId),
     queryFn: async (): Promise<ChatUiMessage[]> => {
-      const searchParams = new URLSearchParams({
-        conversationId: conversationId as string,
-        page: '1',
-        pageSize: '100',
-        order: 'asc',
-      });
-      const response = await requestJson<PublicMessagesPayload>(`/api/messages?${searchParams.toString()}`);
+      const allMessages: PublicMessageRecord[] = [];
+      let page = 1;
+      let total = Number.POSITIVE_INFINITY;
 
-      return toChatUiMessages(response.items);
+      while (page <= MAX_MESSAGE_PAGES && allMessages.length < total) {
+        const searchParams = new URLSearchParams({
+          conversationId: conversationId as string,
+          page: String(page),
+          pageSize: String(MESSAGE_PAGE_SIZE),
+          order: 'asc',
+        });
+        const response = await requestJson<PublicMessagesPayload>(`/api/messages?${searchParams.toString()}`);
+        const effectivePageSize = response.pageSize > 0 ? response.pageSize : MESSAGE_PAGE_SIZE;
+
+        total = Number.isFinite(response.total) ? Math.max(response.total, allMessages.length + response.items.length) : total;
+        allMessages.push(...response.items);
+
+        if (response.items.length === 0 || response.items.length < effectivePageSize) {
+          break;
+        }
+
+        page += 1;
+      }
+
+      return toChatUiMessages(allMessages);
     },
   });
 }

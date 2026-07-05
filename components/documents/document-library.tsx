@@ -40,6 +40,10 @@ function sortLabel(sort: 'createdAt' | 'updatedAt' | 'title') {
   return sort === 'title' ? 'Title' : sort === 'createdAt' ? 'Created' : 'Updated';
 }
 
+function formatChunkCount(chunkCount: number) {
+  return `${chunkCount} ${chunkCount === 1 ? 'chunk' : 'chunks'}`;
+}
+
 function canReindexDocument(document: DocumentRecord, workflow: WorkflowRecord | undefined) {
   if (document.deletedAt) {
     return false;
@@ -173,7 +177,11 @@ export function DocumentLibrary({
                       </div>
                       <div>
                         <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Chunk count</dt>
-                        <dd className="mt-1 text-sm text-[color:var(--text-muted)]">Pending pipeline telemetry</dd>
+                        <dd className="mt-1 text-sm text-[color:var(--text-strong)]">
+                          {Number.isFinite(document.chunkCount) && document.chunkCount >= 0
+                            ? formatChunkCount(document.chunkCount)
+                            : 'Unknown'}
+                        </dd>
                       </div>
                       <div>
                         <dt className="text-[0.68rem] uppercase tracking-[0.18em] text-[color:var(--text-dim)]">Embedding status</dt>

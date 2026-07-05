@@ -21,6 +21,7 @@ describe('DocumentLibrary', () => {
             originalFilename: 'quarterly-report.pdf',
             mimeType: 'application/pdf',
             fileSizeBytes: 1024,
+            chunkCount: 12,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
             deletedAt: null,
@@ -33,6 +34,7 @@ describe('DocumentLibrary', () => {
             originalFilename: 'draft-contract.pdf',
             mimeType: 'application/pdf',
             fileSizeBytes: 2048,
+            chunkCount: 4,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
             deletedAt: null,
@@ -96,6 +98,7 @@ describe('DocumentLibrary', () => {
             originalFilename: 'vendor-checklist.pdf',
             mimeType: 'application/pdf',
             fileSizeBytes: 4096,
+            chunkCount: 0,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
             deletedAt: null,
@@ -119,5 +122,56 @@ describe('DocumentLibrary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-index Vendor Checklist' }));
 
     expect(onReindex).toHaveBeenCalledWith('document_failed');
+  });
+
+  it('renders real chunk counts instead of placeholder telemetry copy', () => {
+    render(
+      createElement(DocumentLibrary, {
+        documents: [
+          {
+            id: 'document_ready',
+            uploadId: 'upload_1',
+            status: 'READY',
+            title: 'Quarterly Report',
+            originalFilename: 'quarterly-report.pdf',
+            mimeType: 'application/pdf',
+            fileSizeBytes: 1024,
+            chunkCount: 12,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
+          },
+          {
+            id: 'document_empty',
+            uploadId: 'upload_2',
+            status: 'READY',
+            title: 'Empty Notes',
+            originalFilename: 'empty-notes.txt',
+            mimeType: 'text/plain',
+            fileSizeBytes: 12,
+            chunkCount: 0,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+            deletedAt: null,
+          },
+        ],
+        workflowsByDocumentId: new Map(),
+        uploadHistory: [],
+        search: '',
+        statusFilter: 'ALL',
+        sort: 'updatedAt',
+        onSearchChange: vi.fn(),
+        onStatusFilterChange: vi.fn(),
+        onSortChange: vi.fn(),
+        onDelete: vi.fn(),
+        onReindex: vi.fn(),
+        reindexingDocumentId: null,
+        reindexError: null,
+      }),
+    );
+
+    expect(screen.getAllByText('12 chunks')).toHaveLength(2);
+    expect(screen.getAllByText('0 chunks').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Pending pipeline telemetry')).not.toBeInTheDocument();
   });
 });

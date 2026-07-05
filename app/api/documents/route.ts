@@ -8,23 +8,9 @@ import { validateWithSchema } from '@/lib/http/route-validation';
 import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { DocumentService, type DocumentDto, type DocumentQuery } from '@/lib/services/document-service';
+import { DocumentService, toPublicDocumentDto, type DocumentQuery } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
-function toPublicDocumentDto(document: DocumentDto) {
-  return {
-    id: document.id,
-    uploadId: document.uploadId,
-    status: document.status,
-    title: document.title,
-    originalFilename: document.originalFilename,
-    mimeType: document.mimeType,
-    fileSizeBytes: document.fileSizeBytes,
-    createdAt: document.createdAt,
-    updatedAt: document.updatedAt,
-    deletedAt: document.deletedAt,
-  };
-}
 const documentQuerySchema = z.object({
   search: z.preprocess(
     (value) => {

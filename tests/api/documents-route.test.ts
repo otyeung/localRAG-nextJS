@@ -33,6 +33,31 @@ vi.mock('@/lib/services/document-service', () => ({
     softDeleteDocument = routeMocks.softDeleteDocument;
     requestReindex = routeMocks.requestReindex;
   },
+  toPublicDocumentDto: (document: {
+    id: string;
+    uploadId: string;
+    status: string;
+    title: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    chunkCount: number;
+    createdAt: string;
+    updatedAt: string;
+    deletedAt: string | null;
+  }) => ({
+    id: document.id,
+    uploadId: document.uploadId,
+    status: document.status,
+    title: document.title,
+    originalFilename: document.originalFilename,
+    mimeType: document.mimeType,
+    fileSizeBytes: document.fileSizeBytes,
+    chunkCount: document.chunkCount,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    deletedAt: document.deletedAt,
+  }),
 }));
 
 vi.mock('@/lib/services/workflow-service', () => ({
@@ -79,6 +104,7 @@ describe('documents routes', () => {
           originalFilename: 'quarterly-report.pdf',
           mimeType: 'application/pdf',
           fileSizeBytes: 1024,
+          chunkCount: 12,
           fileHash: 'hash_1',
           storagePath: '/uploads/quarterly-report.pdf',
           metadata: { source: 'upload' },
@@ -99,6 +125,7 @@ describe('documents routes', () => {
       originalFilename: 'quarterly-report.pdf',
       mimeType: 'application/pdf',
       fileSizeBytes: 1024,
+      chunkCount: 12,
       fileHash: 'hash_1',
       storagePath: '/uploads/quarterly-report.pdf',
       metadata: { source: 'upload' },
@@ -145,6 +172,7 @@ describe('documents routes', () => {
       originalFilename: 'quarterly-report.pdf',
       mimeType: 'application/pdf',
       fileSizeBytes: 1024,
+      chunkCount: 12,
       fileHash: 'hash_1',
       storagePath: '/uploads/quarterly-report.pdf',
       metadata: { source: 'upload' },
@@ -183,6 +211,7 @@ describe('documents routes', () => {
             originalFilename: 'quarterly-report.pdf',
             mimeType: 'application/pdf',
             fileSizeBytes: 1024,
+            chunkCount: 12,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-02T00:00:00.000Z',
             deletedAt: null,
@@ -273,6 +302,7 @@ describe('documents routes', () => {
         originalFilename: 'quarterly-report.pdf',
         mimeType: 'application/pdf',
         fileSizeBytes: 1024,
+        chunkCount: 12,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-02T00:00:00.000Z',
         deletedAt: null,
@@ -350,6 +380,7 @@ describe('documents routes', () => {
         originalFilename: 'quarterly-report.pdf',
         mimeType: 'application/pdf',
         fileSizeBytes: 1024,
+        chunkCount: 12,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-03T00:00:00.000Z',
         deletedAt: '2026-01-03T00:00:00.000Z',

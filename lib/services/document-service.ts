@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { DocumentStatus, WorkflowStatus, type Document, type Prisma, type PrismaClient } from '@prisma/client';
+import { DocumentStatus, WorkflowStatus, type Prisma, type PrismaClient } from '@prisma/client';
 import { nanoid } from 'nanoid';
 
 import { prisma } from '@/lib/db/prisma';
@@ -21,6 +21,7 @@ export type DocumentDto = {
   originalFilename: string;
   mimeType: string;
   fileSizeBytes: number;
+  chunkCount: number;
   fileHash: string;
   storagePath: string;
   metadata: unknown;
@@ -37,6 +38,7 @@ export type PublicDocumentDto = {
   originalFilename: string;
   mimeType: string;
   fileSizeBytes: number;
+  chunkCount: number;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -58,7 +60,17 @@ export type DocumentListResult = {
   pageSize: number;
 };
 
-function toDocumentDto(document: Document): DocumentDto {
+type DocumentWithChunkCount = Prisma.DocumentGetPayload<{
+  include: {
+    _count: {
+      select: {
+        chunks: true;
+      };
+    };
+  };
+}>;
+
+function toDocumentDto(document: DocumentWithChunkCount): DocumentDto {
   return {
     id: document.id,
     uploadId: document.uploadId,
@@ -67,6 +79,7 @@ function toDocumentDto(document: Document): DocumentDto {
     originalFilename: document.originalFilename,
     mimeType: document.mimeType,
     fileSizeBytes: document.fileSizeBytes,
+    chunkCount: document._count.chunks,
     fileHash: document.fileHash,
     storagePath: document.storagePath,
     metadata: document.metadata,
@@ -85,6 +98,7 @@ export function toPublicDocumentDto(document: DocumentDto): PublicDocumentDto {
     originalFilename: document.originalFilename,
     mimeType: document.mimeType,
     fileSizeBytes: document.fileSizeBytes,
+    chunkCount: document.chunkCount,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
     deletedAt: document.deletedAt,
@@ -177,6 +191,13 @@ export class DocumentService {
     const [items, total] = await Promise.all([
       this.db.document.findMany({
         where,
+        include: {
+          _count: {
+            select: {
+              chunks: true,
+            },
+          },
+        },
         orderBy: { [sort]: order },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -199,6 +220,13 @@ export class DocumentService {
         userId,
         deletedAt: null,
       },
+      include: {
+        _count: {
+          select: {
+            chunks: true,
+          },
+        },
+      },
     });
 
     if (!document) {
@@ -214,6 +242,13 @@ export class DocumentService {
         id: documentId,
         userId,
         deletedAt: null,
+      },
+      include: {
+        _count: {
+          select: {
+            chunks: true,
+          },
+        },
       },
     });
 
@@ -249,7 +284,12 @@ export class DocumentService {
       return deleted;
     });
 
-    return toDocumentDto(deleted);
+    return {
+      ...toDocumentDto(document),
+      status: deleted.status,
+      updatedAt: deleted.updatedAt.toISOString(),
+      deletedAt: deleted.deletedAt?.toISOString() ?? null,
+    };
   }
 
   async requestReindex(userId: string, documentId: string, requestId?: string): Promise<{ workflowExecutionId: string; externalExecutionId: string | null; status: keyof typeof WorkflowStatus }> {
