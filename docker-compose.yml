@@ -102,11 +102,11 @@ services:
       - '5678'
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./docker/n8n/workflows:/workflows:ro
+      - ./docker/n8n:/n8n-bootstrap:ro
       - app_data:/data:ro
     command: >
-      sh -c "n8n import:workflow --separate --input=/workflows --overwrite &&
-      n8n update:workflow --all --active=true &&
+      sh -c "n8n import:workflow --separate --input=/n8n-bootstrap/workflows --overwrite &&
+      node /n8n-bootstrap/publish-targeted-workflows.mjs --input=/n8n-bootstrap/workflows &&
       n8n start"
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:5678/healthz').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]

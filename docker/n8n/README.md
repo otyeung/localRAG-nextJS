@@ -1,7 +1,7 @@
 # n8n workflow assets
 
 These workflow exports are imported automatically by the `n8n` service in `docker-compose.yml`.
-The service then runs `n8n update:workflow --all --active=true` before `n8n start`, because `n8n import:workflow` deactivates imported workflows by default on single-main instances.
+The service then runs `publish-targeted-workflows.mjs` to activate only the committed `ingestion` and `retrieval` workflows before `n8n start`, because `n8n import:workflow` deactivates imported workflows by default on single-main instances.
 
 ## Included workflows
 
@@ -29,7 +29,7 @@ Because the header is resolved server-side from container environment variables,
 `docker compose up` does not require `N8N_API_KEY` for Next.js to start or for internal webhook execution to work. The supported local path is:
 
 1. Compose starts `postgres`, `qdrant`, and `qdrant-init`.
-2. The `n8n` container imports the committed workflows and activates them with the CLI before `n8n start`.
+2. The `n8n` container imports the committed workflows and publishes only the committed `ingestion` and `retrieval` workflows with the CLI before `n8n start`.
 3. `nextjs` calls only the internal `/webhook/ingestion` and `/webhook/retrieval` endpoints with `N8N_WEBHOOK_SECRET`.
 
 This repository does not provide a supported CLI or environment-variable path to create n8n API keys. Current n8n docs only document API-key creation from authenticated UI settings, and this stack intentionally does not publish n8n to the host.

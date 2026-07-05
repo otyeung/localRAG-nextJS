@@ -19,6 +19,7 @@ describe('docker compose', () => {
   const compose = readFileSync('docker-compose.yml', 'utf8');
   const exampleEnv = readFileSync('.env.example', 'utf8');
   const n8nReadme = readFileSync('docker/n8n/README.md', 'utf8');
+  const n8nBootstrapScript = readFileSync('docker/n8n/publish-targeted-workflows.mjs', 'utf8');
   const ingestionWorkflow = JSON.parse(readFileSync('docker/n8n/workflows/ingestion.json', 'utf8')) as {
     active: boolean;
     nodes: WorkflowNode[];
@@ -53,8 +54,9 @@ describe('docker compose', () => {
   });
 
   it('bootstraps workflows server-side without requiring browser activation', () => {
-    expect(compose).toContain('n8n import:workflow --separate --input=/workflows --overwrite');
-    expect(compose).toContain('n8n update:workflow --all --active=true');
+    expect(compose).toContain('n8n import:workflow --separate --input=/n8n-bootstrap/workflows --overwrite');
+    expect(compose).toContain('publish-targeted-workflows.mjs');
+    expect(compose).not.toContain('n8n update:workflow --all --active=true');
   });
 
   it('keeps n8n and qdrant internal by default', () => {
@@ -102,11 +104,20 @@ describe('docker compose', () => {
     expect(n8nReadme).toContain('N8N_API_KEY');
     expect(n8nReadme).toContain('does not provide a supported CLI or environment-variable path to create n8n API keys');
     expect(n8nReadme).toContain('leave `N8N_API_KEY` unset');
+    expect(n8nReadme).toContain('activate only the committed `ingestion` and `retrieval` workflows');
     expect(n8nReadme).not.toContain('docker-compose.n8n-editor.yml');
     expect(n8nReadme).not.toContain('127.0.0.1:5678:5678');
     expect(n8nReadme).not.toContain('http://localhost:5678');
     expect(n8nReadme).not.toMatch(/open n8n/i);
     expect(n8nReadme).not.toMatch(/browser/i);
+  });
+
+  it('publishes only the committed n8n workflow ids after import', () => {
+    expect(n8nBootstrapScript).toContain("allowedWorkflowNames = new Set(['ingestion', 'retrieval'])");
+    expect(n8nBootstrapScript).toContain("n8n', ['publish:workflow', '--id'");
+    expect(n8nBootstrapScript).toContain('Refusing to publish unexpected workflow');
+    expect(n8nBootstrapScript).not.toContain('--all');
+    expect(n8nBootstrapScript).not.toContain('update:workflow');
   });
 
   it('marks imported n8n workflows as active for production webhook registration', () => {
