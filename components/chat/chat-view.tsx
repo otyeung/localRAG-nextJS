@@ -90,13 +90,17 @@ export function ChatView({
     id: initialConversationId ?? 'new-chat',
     transport,
     onFinish: ({ isAbort, isError }) => {
+      const resolvedConversationId = pendingResolvedConversationIdRef.current;
+      pendingResolvedConversationIdRef.current = null;
+
       if (isAbort || isError) {
-        pendingResolvedConversationIdRef.current = null;
+        if (resolvedConversationId) {
+          void syncConversationCaches(resolvedConversationId);
+        }
+
         return;
       }
 
-      const resolvedConversationId = pendingResolvedConversationIdRef.current;
-      pendingResolvedConversationIdRef.current = null;
       void syncConversationCaches(resolvedConversationId);
     },
   });

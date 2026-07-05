@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement, useState } from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'ai';
 
@@ -245,6 +245,146 @@ describe('ChatView', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/chat', {
       method: 'POST',
     });
+  });
+
+  it('preserves the resolved conversation after the first response is aborted so retries stay on the same thread', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          'x-conversation-id': 'conversation_server_abort',
+        },
+      }),
+    );
+
+    useChatMock.mockImplementation(() => ({
+      messages,
+      setMessages: vi.fn(),
+      sendMessage,
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    }));
+
+    function Harness() {
+      const [conversationId, setConversationId] = useState<string | null>(null);
+
+      return createElement(ChatView, {
+        initialConversationId: conversationId,
+        onConversationResolved: setConversationId,
+      });
+    }
+
+    render(createElement(Harness));
+
+    const initialChatOptions = useChatMock.mock.calls.at(-1)?.[0];
+    const transport = initialChatOptions?.transport as {
+      fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    };
+
+    await transport.fetch?.('/api/chat', { method: 'POST' });
+    await initialChatOptions?.onFinish?.({
+      message: messages[1],
+      messages,
+      isAbort: true,
+      isDisconnect: false,
+      isError: false,
+      finishReason: 'stop',
+    });
+
+    await waitFor(() => {
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['conversations'] });
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['messages', 'conversation_server_abort'] });
+      expect(useChatMock.mock.calls.at(-1)?.[0]?.id).toBe('conversation_server_abort');
+    });
+
+    fireEvent.change(screen.getByLabelText('Message input'), { target: { value: 'Retry on the same thread.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        { text: 'Retry on the same thread.' },
+        {
+          body: {
+            conversationId: 'conversation_server_abort',
+          },
+        },
+      ),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith('/api/chat', { method: 'POST' });
+  });
+
+  it('preserves the resolved conversation after the first response errors so retries stay on the same thread', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, {
+        status: 500,
+        headers: {
+          'x-conversation-id': 'conversation_server_error',
+        },
+      }),
+    );
+
+    useChatMock.mockImplementation(() => ({
+      messages,
+      setMessages: vi.fn(),
+      sendMessage,
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    }));
+
+    function Harness() {
+      const [conversationId, setConversationId] = useState<string | null>(null);
+
+      return createElement(ChatView, {
+        initialConversationId: conversationId,
+        onConversationResolved: setConversationId,
+      });
+    }
+
+    render(createElement(Harness));
+
+    const initialChatOptions = useChatMock.mock.calls.at(-1)?.[0];
+    const transport = initialChatOptions?.transport as {
+      fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    };
+
+    await transport.fetch?.('/api/chat', { method: 'POST' });
+    await initialChatOptions?.onFinish?.({
+      message: messages[1],
+      messages,
+      isAbort: false,
+      isDisconnect: false,
+      isError: true,
+      finishReason: 'error',
+    });
+
+    await waitFor(() => {
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['conversations'] });
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['messages', 'conversation_server_error'] });
+      expect(useChatMock.mock.calls.at(-1)?.[0]?.id).toBe('conversation_server_error');
+    });
+
+    fireEvent.change(screen.getByLabelText('Message input'), { target: { value: 'Continue the persisted thread.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        { text: 'Continue the persisted thread.' },
+        {
+          body: {
+            conversationId: 'conversation_server_error',
+          },
+        },
+      ),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith('/api/chat', { method: 'POST' });
   });
 
   it('renders accessible tool execution states and ignores unknown parts', () => {
