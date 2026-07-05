@@ -58,6 +58,8 @@ Key product surfaces in this slice:
    TEMP_UPLOAD_DIRECTORY=.local/uploads
    ```
 
+   `N8N_API_KEY` is optional for webhook-only local startup. Leave it blank unless an administrator provisions a real n8n REST API key outside this browserless/internal-only stack.
+
 3. Start the full local stack:
 
    ```bash
@@ -70,13 +72,15 @@ Key product surfaces in this slice:
    docker compose exec nextjs pnpm prisma migrate dev
    ```
 
-5. Seed the bundled corpus through the real upload/ingestion flow:
+5. If you need corpus seeding, workflow-status polling, or live validation, first provision a real `N8N_API_KEY` through an external/admin n8n path and restart the relevant services. Without that key, the app can still start in webhook-only mode, but `/api/health` reports n8n as degraded and API-backed seed/status polling remains unavailable.
+
+6. Seed the bundled corpus through the real upload/ingestion flow:
 
    ```bash
    docker compose exec nextjs pnpm seed:corpus
    ```
 
-6. Optional host-run mode for app-only work:
+7. Optional host-run mode for app-only work:
 
    ```bash
    pnpm dev --hostname 0.0.0.0 --port 3000
@@ -124,7 +128,7 @@ Required variables are documented in `.env.example`:
 
 Operational notes:
 
-- `N8N_API_KEY` is intentionally optional for local webhook-only mode; leave it blank unless an administrator provisions a real key outside this stack.
+- `N8N_API_KEY` is intentionally optional for local webhook-only startup; corpus seeding, API-backed workflow polling, and live validation require a real n8n REST API key provisioned outside this browserless/internal-only stack.
 - `TEMP_UPLOAD_DIRECTORY` should point to writable storage isolated from the browser and external services.
 - `LOG_LEVEL`, `MAX_UPLOAD_SIZE`, `N8N_TIMEOUT`, `N8N_RETRY_COUNT`, and `N8N_RETRY_DELAY` control runtime behavior without code changes.
 
@@ -135,13 +139,13 @@ The foundation slice ships with two PDFs in the repository root:
 - `1706.03762v7.pdf`
 - `cymbal-starlight-2024.pdf`
 
-After an administrator provisions `N8N_API_KEY` in the Compose environment and restarts the relevant services, seed them on the supported Compose stack with:
+After an administrator provisions a real `N8N_API_KEY` in the Compose environment and restarts the relevant services, seed them on the supported Compose stack with:
 
 ```bash
 docker compose exec nextjs pnpm seed:corpus
 ```
 
-The seed flow is idempotent by file hash, writes uploads/documents/workflow records for the seeded anonymous user, and exercises the same ingestion service used by normal uploads. A host-run `pnpm seed:corpus` is only suitable when your env vars already point to host-reachable n8n and Qdrant endpoints.
+The seed flow is idempotent by file hash, writes uploads/documents/workflow records for the seeded anonymous user, and exercises the same ingestion service used by normal uploads. A host-run `pnpm seed:corpus` is only suitable when your env vars already point to host-reachable n8n and Qdrant endpoints. Without a provisioned REST API key, the app can still boot and webhook ingestion can still work, but n8n health remains degraded and API-backed seed/workflow polling stays unavailable.
 
 ## RAG Validation Questions
 
@@ -192,7 +196,7 @@ pnpm test:e2e
 Additional notes:
 
 - `pnpm test:e2e` runs the mocked UI suite by default.
-- Live corpus validation is guarded by `LOCALRAG_LIVE_CORPUS_TESTS=1` plus healthy `database`, `n8n`, `qdrant`, a real `OPENAI_API_KEY`, and a provisioned `N8N_API_KEY`.
+- Live corpus validation is guarded by `LOCALRAG_LIVE_CORPUS_TESTS=1` plus healthy `database`, `n8n`, `qdrant`, a real `OPENAI_API_KEY`, and a real admin-provisioned `N8N_API_KEY`.
 - Docker contract coverage also exists in `tests/unit/docker-compose.test.ts`.
 
 See `docs/operations/testing.md` for detailed guidance.

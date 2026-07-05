@@ -65,7 +65,7 @@ Prerequisites:
 - healthy Qdrant
 - seeded corpus present
 
-The checked-in Compose stack does not publish n8n or Qdrant directly, so the host commands above require operator-managed port forwarding or temporary exposure of those services first. They are intentionally not runnable on the default stack without that extra setup.
+The checked-in Compose stack does not publish n8n or Qdrant directly, so the host commands above require operator-managed port forwarding or temporary exposure of those services first. They are intentionally not runnable on the default stack without that extra setup. Without a real admin-provisioned `N8N_API_KEY`, the app can still boot, but `/api/health` reports n8n as degraded and live corpus checks that rely on API-backed seed/workflow polling remain unavailable.
 
 The live checks verify:
 

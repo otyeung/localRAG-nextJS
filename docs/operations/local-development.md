@@ -38,7 +38,7 @@ Provide real values for:
 - `QDRANT_URL`
 - `ANONYMOUS_COOKIE_SECRET`
 
-Leave `N8N_API_KEY` blank unless an administrator has provisioned a real n8n API key outside this stack. If you add or rotate that key later, restart `nextjs` and `n8n` so the containers pick it up.
+Leave `N8N_API_KEY` blank unless an administrator has provisioned a real n8n REST API key outside this browserless/internal-only stack. If you add or rotate that key later, restart `nextjs` and `n8n` so the containers pick it up.
 
 ## 3. Start infrastructure
 
@@ -65,7 +65,7 @@ docker compose exec nextjs pnpm prisma generate
 
 ## 5. Seed the bundled PDF corpus
 
-After an administrator provisions `N8N_API_KEY` in `.env` and restarts the stack, run:
+After an administrator provisions a real `N8N_API_KEY` in `.env` and restarts the stack, run:
 
 ```bash
 docker compose exec nextjs pnpm seed:corpus
@@ -76,7 +76,7 @@ This processes:
 - `1706.03762v7.pdf`
 - `cymbal-starlight-2024.pdf`
 
-The seed script is idempotent by file hash and uses the same ingestion path as normal uploads. If you want to run `pnpm seed:corpus` on the host instead, you must first override the env vars to host-reachable n8n and Qdrant endpoints.
+The seed script is idempotent by file hash and uses the same ingestion path as normal uploads. If you want to run `pnpm seed:corpus` on the host instead, you must first override the env vars to host-reachable n8n and Qdrant endpoints. Without that REST API key, Next.js can still boot and webhook ingestion can still run, but `/api/health` stays degraded for n8n and API-backed seed/workflow polling remains unavailable.
 
 ## 6. Start the app
 
@@ -109,6 +109,6 @@ Healthy local runs should show:
 
 ## Troubleshooting
 
-- **n8n degraded in `/api/health`:** expected when `N8N_API_KEY` is blank; webhook-only mode still works.
+- **n8n degraded in `/api/health`:** expected when `N8N_API_KEY` is blank; webhook-only mode still works, but API-backed seed/workflow polling and live validation stay unavailable until an administrator provisions a real key.
 - **Seed corpus times out:** verify `docker compose ps`, then confirm `n8n`, `qdrant`, and `postgres` are healthy.
 - **Playwright upload temp files:** ensure `TEMP_UPLOAD_DIRECTORY` points to a writable project-local path.
