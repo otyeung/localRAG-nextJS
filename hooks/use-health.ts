@@ -1,38 +1,56 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 type HealthService = {
   name: string;
-  status: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
   detail?: string;
 };
 
 type HealthSnapshot = {
   supported: boolean;
-  status: string;
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'pending';
   label: string;
+  lastCheckedAt?: string;
+  version?: string;
+  uptimeSeconds?: number;
   services: HealthService[];
 };
 
 type ApiResponse<T> = { data: T };
 
+type HealthCheck = {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  message?: string;
+  latencyMs?: number;
+};
+
+const serviceLabel: Record<string, string> = {
+  app: 'Application',
+  database: 'Database',
+  n8n: 'n8n',
+  qdrant: 'Qdrant',
+  openai: 'OpenAI',
+};
+
 function normalizeServices(value: unknown): HealthService[] {
   if (Array.isArray(value)) {
     return value
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-      .map((item, index) => ({
-        name: typeof item.name === 'string' ? item.name : `Service ${index + 1}`,
-        status: typeof item.status === 'string' ? item.status : 'unknown',
-        detail: typeof item.detail === 'string' ? item.detail : undefined,
-      }));
-  }
+      .map((item, index) => {
+        const check = item as Partial<HealthCheck> & { detail?: string };
+        const status = check.status === 'healthy' || check.status === 'degraded' || check.status === 'unhealthy' ? check.status : 'degraded';
+        const detail = typeof check.message === 'string' ? check.message : typeof check.detail === 'string' ? check.detail : undefined;
+        const latencyMs = typeof check.latencyMs === 'number' ? check.latencyMs : undefined;
 
-  if (value && typeof value === 'object') {
-    return Object.entries(value as Record<string, unknown>).map(([name, status]) => ({
-      name,
-      status: typeof status === 'string' ? status : 'unknown',
-    }));
+        return {
+          name: typeof check.name === 'string' ? (serviceLabel[check.name] ?? check.name) : `Service ${index + 1}`,
+          status,
+          detail: detail ? (latencyMs !== undefined ? `${detail} (${latencyMs}ms)` : detail) : latencyMs !== undefined ? `${latencyMs}ms` : undefined,
+        };
+      });
   }
 
   return [];
@@ -60,17 +78,26 @@ async function requestHealth(): Promise<HealthSnapshot> {
   }
 
   const data = (body as ApiResponse<Record<string, unknown>>).data;
-  const status = typeof data.status === 'string' ? data.status : 'available';
+  const status =
+    data.status === 'healthy' || data.status === 'degraded' || data.status === 'unhealthy' || data.status === 'pending'
+      ? data.status
+      : 'pending';
 
   return {
     supported: true,
     status,
-    label: status === 'healthy' ? 'Healthy' : status === 'degraded' ? 'Degraded' : 'Available',
-    services: normalizeServices(data.services),
+    label: status === 'healthy' ? 'Healthy' : status === 'degraded' ? 'Degraded' : status === 'unhealthy' ? 'Unhealthy' : 'Available',
+    lastCheckedAt: typeof data.checkedAt === 'string' ? data.checkedAt : undefined,
+    version: typeof data.version === 'string' ? data.version : undefined,
+    uptimeSeconds: typeof data.uptimeSeconds === 'number' ? data.uptimeSeconds : undefined,
+    services: normalizeServices(data.checks ?? data.services),
   };
 }
 
-export function useHealth() {
+export type { HealthService, HealthSnapshot };
+export type UseHealthResult = Pick<UseQueryResult<HealthSnapshot, Error>, 'data' | 'isLoading' | 'isError' | 'error'>;
+
+export function useHealth(): UseQueryResult<HealthSnapshot, Error> {
   return useQuery({
     queryKey: ['health'],
     queryFn: requestHealth,

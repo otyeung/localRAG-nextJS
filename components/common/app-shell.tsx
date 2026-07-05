@@ -7,6 +7,7 @@ import { DocumentLibrary } from '@/components/documents/document-library';
 import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Sidebar } from '@/components/sidebar/sidebar';
 import { StatusBadge } from '@/components/common/status-badge';
+import { SystemStatus } from '@/components/common/system-status';
 import { UploadDropzone } from '@/components/upload/upload-dropzone';
 import { useConversations, type ConversationSummary } from '@/hooks/use-conversations';
 import { useDocuments } from '@/hooks/use-documents';
@@ -15,9 +16,6 @@ import { useUploadQueue } from '@/hooks/use-upload-queue';
 
 type RightPanel = 'knowledge' | 'settings';
 type HealthTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
-
-const TASK_9_PLACEHOLDER_COPY =
-  'The health route is expected in Task 9. This placeholder is already wired to consume it when available.';
 
 export function AppShell() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -91,22 +89,13 @@ export function AppShell() {
       ? 'success'
       : health.data?.status === 'degraded' || health.data?.status === 'pending'
         ? 'warning'
-        : 'neutral';
-  let healthBody = TASK_9_PLACEHOLDER_COPY;
+        : health.data?.status === 'unhealthy'
+          ? 'danger'
+          : 'neutral';
 
   if (health.isError) {
     healthLabel = 'Health unavailable';
     healthTone = 'danger';
-    healthBody =
-      health.error instanceof Error && health.error.message
-        ? health.error.message
-        : 'The /api/health endpoint returned an error. Check the service and try again.';
-  } else if (health.isLoading) {
-    healthBody = 'Checking the /api/health endpoint for the latest system status.';
-  } else if (health.data?.supported === false) {
-    healthBody = TASK_9_PLACEHOLDER_COPY;
-  } else if (health.data?.services?.length === 0) {
-    healthBody = 'The health endpoint responded without per-service details.';
   }
 
   return (
@@ -201,40 +190,7 @@ export function AppShell() {
               <SettingsPanel />
             )}
 
-            <section className="rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-5 shadow-[var(--shadow-panel)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-semibold text-[color:var(--text-strong)]">System Status</h3>
-                  <p className="mt-1 text-sm text-[color:var(--text-muted)]">
-                    Infrastructure telemetry and service health snapshots.
-                  </p>
-                </div>
-                <StatusBadge label={healthLabel} tone={healthTone} />
-              </div>
-              <div className="mt-4 space-y-3">
-                {health.data?.services?.length ? (
-                  health.data.services.map((service) => (
-                    <div
-                      key={service.name}
-                      className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] px-4 py-3"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-medium text-[color:var(--text-strong)]">{service.name}</span>
-                        <StatusBadge label={service.status} tone={service.status === 'healthy' ? 'success' : 'warning'} />
-                      </div>
-                      {service.detail ? <p className="mt-2 text-xs text-[color:var(--text-dim)]">{service.detail}</p> : null}
-                    </div>
-                  ))
-                ) : (
-                  <div
-                    role={health.isError ? 'alert' : undefined}
-                    className="rounded-2xl border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-4 text-sm text-[color:var(--text-muted)]"
-                  >
-                    {healthBody}
-                  </div>
-                )}
-              </div>
-            </section>
+            <SystemStatus health={health} />
           </aside>
         </div>
       </div>
