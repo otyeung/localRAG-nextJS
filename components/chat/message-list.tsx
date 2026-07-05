@@ -5,6 +5,7 @@ import { Copy, RefreshCw } from 'lucide-react';
 
 import { StatusBadge } from '@/components/common/status-badge';
 import { MarkdownMessage } from '@/components/chat/markdown-message';
+import { getSafeCitationUrl } from '@/lib/chat/citation-url';
 
 type ChatMessage = UIMessage<{
   model?: string;
@@ -37,6 +38,20 @@ function getSourceParts(message: ChatMessage) {
 
 function getToolParts(message: ChatMessage) {
   return message.parts.filter((part): part is ToolPart => part.type === 'dynamic-tool' || part.type.startsWith('tool-'));
+}
+
+function renderSourceUrl(url: string) {
+  const safeUrl = getSafeCitationUrl(url);
+
+  if (!safeUrl) {
+    return <p className="mt-1 text-sm text-[color:var(--text-muted)]">{url}</p>;
+  }
+
+  return (
+    <a href={safeUrl} className="mt-1 inline-block text-sm text-[color:var(--accent)] underline underline-offset-4">
+      {url}
+    </a>
+  );
 }
 
 function humanizeToolName(name: string) {
@@ -180,18 +195,11 @@ export function MessageList({
                       key={source.sourceId}
                       className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
                     >
-                      <p className="text-sm font-medium text-[color:var(--text-strong)]">
-                        {'title' in source && source.title ? source.title : source.sourceId}
-                      </p>
-                      {'url' in source ? (
-                        <a
-                          href={source.url}
-                          className="mt-1 inline-block text-sm text-[color:var(--accent)] underline underline-offset-4"
-                        >
-                          {source.url}
-                        </a>
-                      ) : null}
-                    </div>
+                       <p className="text-sm font-medium text-[color:var(--text-strong)]">
+                         {'title' in source && source.title ? source.title : source.sourceId}
+                       </p>
+                       {'url' in source ? renderSourceUrl(source.url) : null}
+                     </div>
                   ))}
                 </div>
               </section>

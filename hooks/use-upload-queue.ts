@@ -291,6 +291,7 @@ export function useUploadQueue() {
     queue,
     uploadHistory: historyQuery.data ?? [],
     isLoadingHistory: historyQuery.isLoading,
+    historyError: historyQuery.error,
     onFilesSelected,
     cancelUpload,
     retryUpload,

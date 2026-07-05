@@ -62,8 +62,12 @@ export function DocumentLibrary({
   hasMoreDocuments = false,
   onLoadMoreDocuments,
   isLoadingMoreDocuments = false,
+  isLoadingDocuments = false,
+  documentsError = null,
   workflowsByDocumentId,
   uploadHistory,
+  isLoadingUploadHistory = false,
+  uploadHistoryError = null,
   search,
   statusFilter,
   sort,
@@ -80,8 +84,12 @@ export function DocumentLibrary({
   hasMoreDocuments?: boolean;
   onLoadMoreDocuments?: () => void;
   isLoadingMoreDocuments?: boolean;
+  isLoadingDocuments?: boolean;
+  documentsError?: string | null;
   workflowsByDocumentId: Map<string, WorkflowRecord>;
   uploadHistory: UploadHistoryItem[];
+  isLoadingUploadHistory?: boolean;
+  uploadHistoryError?: string | null;
   search: string;
   statusFilter: 'ALL' | 'PENDING' | 'INGESTING' | 'READY' | 'FAILED';
   sort: 'createdAt' | 'updatedAt' | 'title';
@@ -220,8 +228,23 @@ export function DocumentLibrary({
                           ) : null}
                         </div>
                         <div className="mt-3 space-y-2">
-                          {relatedUploads.length > 0 ? (
-                            relatedUploads.map((upload) => (
+                        {isLoadingUploadHistory ? (
+                           <div
+                             role="status"
+                             aria-live="polite"
+                             className="rounded-2xl border border-dashed border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3 text-sm text-[color:var(--text-muted)]"
+                           >
+                             Loading upload history…
+                           </div>
+                        ) : uploadHistoryError ? (
+                           <div
+                             role="alert"
+                             className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300"
+                           >
+                             {uploadHistoryError}
+                           </div>
+                        ) : relatedUploads.length > 0 ? (
+                           relatedUploads.map((upload) => (
                               <div
                                 key={upload.id}
                                 className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
@@ -232,12 +255,12 @@ export function DocumentLibrary({
                                 </div>
                                 <StatusBadge label={upload.status} tone={statusTone(upload.status)} />
                               </div>
-                            ))
-                          ) : (
-                            <p className="text-sm text-[color:var(--text-muted)]">
-                              Upload history will populate once the public upload feed is available for this document.
-                            </p>
-                          )}
+                           ))
+                         ) : (
+                           <p className="text-sm text-[color:var(--text-muted)]">
+                             Upload history will populate once the public upload feed is available for this document.
+                           </p>
+                         )}
                         </div>
                       </div>
                     </div>
@@ -277,6 +300,21 @@ export function DocumentLibrary({
               </button>
             ) : null}
           </>
+        ) : isLoadingDocuments ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-[1.75rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-6 text-sm text-[color:var(--text-muted)]"
+          >
+            Loading documents…
+          </div>
+        ) : documentsError ? (
+          <div
+            role="alert"
+            className="rounded-[1.75rem] border border-rose-500/30 bg-rose-500/10 p-6 text-sm text-rose-300"
+          >
+            {documentsError}
+          </div>
         ) : (
           <div className="rounded-[1.75rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-6 text-sm text-[color:var(--text-muted)]">
             No documents match the current knowledge-base filters.

@@ -97,4 +97,43 @@ describe('Sidebar', () => {
     expect(screen.getByRole('menuitem', { name: 'Open settings' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'View system status' })).toBeInTheDocument();
   });
+
+  it('renders accessible loading and error states for conversations', () => {
+    const { rerender } = render(
+      createElement(Sidebar, {
+        activeConversationId: null,
+        conversations: [],
+        conversationSearchValue: '',
+        onConversationSearchChange: vi.fn(),
+        onConversationSelect: vi.fn(),
+        onNewChat: vi.fn(),
+        onConversationRename: vi.fn(),
+        onConversationDelete: vi.fn(),
+        healthLabel: 'Checking',
+        isLoadingConversations: true,
+      }),
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading conversations…');
+    expect(screen.queryByText('No conversations match the current filters.')).not.toBeInTheDocument();
+
+    rerender(
+      createElement(Sidebar, {
+        activeConversationId: null,
+        conversations: [],
+        conversationSearchValue: '',
+        onConversationSearchChange: vi.fn(),
+        onConversationSelect: vi.fn(),
+        onNewChat: vi.fn(),
+        onConversationRename: vi.fn(),
+        onConversationDelete: vi.fn(),
+        healthLabel: 'Needs attention',
+        isLoadingConversations: false,
+        conversationsError: 'Conversation service unavailable.',
+      }),
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Conversation service unavailable.');
+    expect(screen.queryByText('No conversations match the current filters.')).not.toBeInTheDocument();
+  });
 });

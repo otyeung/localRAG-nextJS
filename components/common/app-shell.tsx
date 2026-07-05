@@ -116,6 +116,8 @@ export function AppShell() {
               void conversations.fetchNextPage();
             }}
             isLoadingMoreConversations={conversations.isFetchingNextPage}
+            isLoadingConversations={conversations.isLoading}
+            conversationsError={conversations.error?.message ?? null}
             activeConversationId={activeConversationId}
             conversationSearchValue={conversationSearch}
             onConversationSearchChange={setConversationSearch}
@@ -149,8 +151,12 @@ export function AppShell() {
                     void documents.fetchNextPage();
                   }}
                   isLoadingMoreDocuments={documents.isFetchingNextPage}
+                  isLoadingDocuments={documents.isLoading}
+                  documentsError={documents.error?.message ?? null}
                   workflowsByDocumentId={documents.workflowsByDocumentId}
                   uploadHistory={uploads.uploadHistory}
+                  isLoadingUploadHistory={uploads.isLoadingHistory}
+                  uploadHistoryError={uploads.historyError?.message ?? null}
                   search={documentSearch}
                   statusFilter={documentStatus}
                   sort={documentSort}

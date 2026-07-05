@@ -1,10 +1,10 @@
 import '@testing-library/jest-dom/vitest';
 import { createElement } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DocumentLibrary } from '@/components/documents/document-library';
-import type { WorkflowRecord } from '@/hooks/use-documents';
+import type { DocumentRecord, WorkflowRecord } from '@/hooks/use-documents';
 
 describe('DocumentLibrary', () => {
   it('enables re-index for eligible documents and surfaces loading and error states', () => {
@@ -218,5 +218,108 @@ describe('DocumentLibrary', () => {
 
     expect(onLoadMore).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Showing 1 of 48 documents')).toBeInTheDocument();
+  });
+
+  it('renders accessible loading and error states for empty document results', () => {
+    const { rerender } = render(
+      createElement(DocumentLibrary, {
+        documents: [],
+        workflowsByDocumentId: new Map(),
+        uploadHistory: [],
+        search: '',
+        statusFilter: 'ALL',
+        sort: 'updatedAt',
+        onSearchChange: vi.fn(),
+        onStatusFilterChange: vi.fn(),
+        onSortChange: vi.fn(),
+        onDelete: vi.fn(),
+        onReindex: vi.fn(),
+        reindexingDocumentId: null,
+        reindexError: null,
+        isLoadingDocuments: true,
+      }),
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading documents…');
+    expect(screen.queryByText('No documents match the current knowledge-base filters.')).not.toBeInTheDocument();
+
+    rerender(
+      createElement(DocumentLibrary, {
+        documents: [],
+        workflowsByDocumentId: new Map(),
+        uploadHistory: [],
+        search: '',
+        statusFilter: 'ALL',
+        sort: 'updatedAt',
+        onSearchChange: vi.fn(),
+        onStatusFilterChange: vi.fn(),
+        onSortChange: vi.fn(),
+        onDelete: vi.fn(),
+        onReindex: vi.fn(),
+        reindexingDocumentId: null,
+        reindexError: null,
+        isLoadingDocuments: false,
+        documentsError: 'Document library is unavailable.',
+      }),
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Document library is unavailable.');
+    expect(screen.queryByText('No documents match the current knowledge-base filters.')).not.toBeInTheDocument();
+  });
+
+  it('renders upload history loading and error states before falling back to empty copy', () => {
+    const baseProps = {
+      documents: [
+        {
+          id: 'document_ready',
+          uploadId: 'upload_1',
+          status: 'READY',
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: 1024,
+          chunkCount: 12,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+          deletedAt: null,
+        },
+      ] satisfies DocumentRecord[],
+      workflowsByDocumentId: new Map<string, WorkflowRecord>(),
+      uploadHistory: [],
+      search: '',
+      statusFilter: 'ALL' as const,
+      sort: 'updatedAt' as const,
+      onSearchChange: vi.fn(),
+      onStatusFilterChange: vi.fn(),
+      onSortChange: vi.fn(),
+      onDelete: vi.fn(),
+      onReindex: vi.fn(),
+      reindexingDocumentId: null,
+      reindexError: null,
+    };
+
+    const view = render(createElement(DocumentLibrary, { ...baseProps, isLoadingUploadHistory: true }));
+
+    expect(within(view.container).getByRole('status')).toHaveTextContent('Loading upload history…');
+    expect(
+      within(view.container).queryAllByText(
+        'Upload history will populate once the public upload feed is available for this document.',
+      ),
+    ).toHaveLength(0);
+
+    view.rerender(
+      createElement(DocumentLibrary, {
+        ...baseProps,
+        isLoadingUploadHistory: false,
+        uploadHistoryError: 'Upload history could not be loaded.',
+      }),
+    );
+
+    expect(within(view.container).getByRole('alert')).toHaveTextContent('Upload history could not be loaded.');
+    expect(
+      within(view.container).queryAllByText(
+        'Upload history will populate once the public upload feed is available for this document.',
+      ),
+    ).toHaveLength(0);
   });
 });

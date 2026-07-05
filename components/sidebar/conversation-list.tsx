@@ -8,16 +8,43 @@ import type { ConversationSummary } from '@/hooks/use-conversations';
 export function ConversationList({
   conversations,
   activeConversationId,
+  isLoading = false,
+  error,
   onConversationSelect,
   onConversationRename,
   onConversationDelete,
 }: {
   conversations: ConversationSummary[];
   activeConversationId: string | null;
+  isLoading?: boolean;
+  error?: string | null;
   onConversationSelect: (id: string) => void;
   onConversationRename: (conversation: ConversationSummary) => void;
   onConversationDelete: (conversation: ConversationSummary) => void;
 }) {
+  if (isLoading) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-2xl border border-dashed border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4 text-sm text-[color:var(--text-muted)]"
+      >
+        Loading conversations…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        role="alert"
+        className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-300"
+      >
+        {error}
+      </div>
+    );
+  }
+
   if (conversations.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4 text-sm text-[color:var(--text-muted)]">

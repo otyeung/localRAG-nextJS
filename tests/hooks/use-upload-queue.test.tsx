@@ -238,4 +238,22 @@ describe('useUploadQueue', () => {
     );
     expect(MockXMLHttpRequest.sends).toBe(1);
   });
+
+  it('surfaces upload history query errors without fabricating an empty history', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Upload history unavailable.' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const { result } = renderHook(() => useUploadQueue(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+
+    expect(result.current.uploadHistory).toEqual([]);
+    expect(result.current.historyError?.message).toBe('Upload history unavailable.');
+  });
 });

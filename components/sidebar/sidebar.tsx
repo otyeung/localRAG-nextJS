@@ -13,6 +13,8 @@ export function Sidebar({
   hasMoreConversations = false,
   onLoadMoreConversations,
   isLoadingMoreConversations = false,
+  isLoadingConversations = false,
+  conversationsError = null,
   activeConversationId,
   conversationSearchValue,
   onConversationSearchChange,
@@ -29,6 +31,8 @@ export function Sidebar({
   hasMoreConversations?: boolean;
   onLoadMoreConversations?: () => void;
   isLoadingMoreConversations?: boolean;
+  isLoadingConversations?: boolean;
+  conversationsError?: string | null;
   activeConversationId: string | null;
   conversationSearchValue: string;
   onConversationSearchChange: (value: string) => void;
@@ -161,6 +165,8 @@ export function Sidebar({
         <ConversationList
           conversations={visibleConversations}
           activeConversationId={activeConversationId}
+          isLoading={isLoadingConversations}
+          error={conversationsError}
           onConversationSelect={onConversationSelect}
           onConversationRename={onConversationRename}
           onConversationDelete={onConversationDelete}

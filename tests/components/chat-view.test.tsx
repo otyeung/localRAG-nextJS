@@ -123,6 +123,56 @@ describe('ChatView', () => {
     expect(screen.getAllByRole('button', { name: 'Copy message' }).length).toBeGreaterThan(0);
   });
 
+  it('sanitizes unsafe citation URLs while preserving safe relative links', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant_unsafe_sources',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'Citations attached.' },
+            {
+              type: 'source-url',
+              sourceId: 'source_safe',
+              title: 'Safe source',
+              url: '/api/documents/document_1',
+            },
+            {
+              type: 'source-url',
+              sourceId: 'source_unsafe',
+              title: 'Unsafe source',
+              url: 'javascript:alert(1)',
+            },
+            {
+              type: 'source-url',
+              sourceId: 'source_data',
+              title: 'Data source',
+              url: 'data:text/html;base64,SGk=',
+            },
+          ],
+        },
+      ],
+      setMessages: vi.fn(),
+      sendMessage: vi.fn(),
+      regenerate: vi.fn(),
+      stop: vi.fn(),
+      clearError: vi.fn(),
+      status: 'ready',
+      error: undefined,
+    });
+
+    render(createElement(ChatView, { initialConversationId: 'conversation_1' }));
+
+    expect(screen.getByRole('link', { name: '/api/documents/document_1' })).toHaveAttribute(
+      'href',
+      '/api/documents/document_1',
+    );
+    expect(screen.queryByRole('link', { name: 'javascript:alert(1)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'data:text/html;base64,SGk=' })).not.toBeInTheDocument();
+    expect(screen.getByText('javascript:alert(1)')).toBeInTheDocument();
+    expect(screen.getByText('data:text/html;base64,SGk=')).toBeInTheDocument();
+  });
+
   it('hydrates saved transcripts into useChat messages for an existing conversation', async () => {
     useChatMock.mockImplementation(() => {
       const [hydratedMessages, setHydratedMessages] = useState<UIMessage[]>([]);
