@@ -1648,6 +1648,105 @@ describe('document services', () => {
     });
   });
 
+  it('returns the last persisted workflow state when polling status fails', async () => {
+    const db = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: null,
+          metadata: null,
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          documentId: 'document_1',
+          workflowKey: 'ingestion',
+          status: WorkflowStatus.RUNNING,
+          externalExecutionId: 'exec_123',
+          requestPayload: null,
+          responsePayload: null,
+          metadata: {
+            reconciliationRequired: true,
+            reconciliationHealth: 'degraded',
+            reconciliationIssue: 'UPSTREAM_UNAVAILABLE',
+            reconciliationSource: 'n8n_poll',
+            lastReconciliationAttemptAt: '2026-01-01T00:02:00.000Z',
+            lastReconciliationFailureAt: '2026-01-01T00:02:00.000Z',
+          },
+          errorMessage: null,
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          completedAt: null,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:02:00.000Z'),
+        }),
+      },
+      upload: {
+        updateMany: vi.fn(),
+      },
+      document: {
+        updateMany: vi.fn(),
+      },
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
+
+    try {
+      const executionService = {
+        pollExecution: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
+      };
+      const service = new WorkflowService({
+        db: db as never,
+        executionService: executionService as never,
+      });
+
+      const result = await service.getWorkflowStatus('user_1', 'workflow_1');
+
+      expect(executionService.pollExecution).toHaveBeenCalledWith('exec_123');
+      expect(db.workflowExecution.update).toHaveBeenCalledWith({
+        where: { id: 'workflow_1' },
+        data: {
+          metadata: {
+            reconciliationRequired: true,
+            reconciliationHealth: 'degraded',
+            reconciliationIssue: 'UPSTREAM_UNAVAILABLE',
+            reconciliationSource: 'n8n_poll',
+            lastReconciliationAttemptAt: '2026-01-01T00:02:00.000Z',
+            lastReconciliationFailureAt: '2026-01-01T00:02:00.000Z',
+          },
+        },
+      });
+      expect(result).toMatchObject({
+        id: 'workflow_1',
+        status: 'RUNNING',
+        externalExecutionId: 'exec_123',
+        errorMessage: null,
+        metadata: {
+          reconciliationRequired: true,
+          reconciliationHealth: 'degraded',
+          reconciliationIssue: 'UPSTREAM_UNAVAILABLE',
+          reconciliationSource: 'n8n_poll',
+        },
+      });
+      expect(db.upload.updateMany).not.toHaveBeenCalled();
+      expect(db.document.updateMany).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reconciles active workflows before returning the public workflow list', async () => {
     const db = {
       workflowExecution: {
@@ -1764,6 +1863,129 @@ describe('document services', () => {
       ],
       total: 1,
     });
+  });
+
+  it('keeps listing workflows when one active workflow cannot be polled', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
+
+    try {
+      const db = {
+        workflowExecution: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'workflow_1',
+              userId: 'user_1',
+              uploadId: 'upload_1',
+              documentId: 'document_1',
+              workflowKey: 'ingestion',
+              status: WorkflowStatus.RUNNING,
+              externalExecutionId: 'exec_123',
+              requestPayload: { prompt: 'secret' },
+              responsePayload: null,
+              metadata: null,
+              errorMessage: null,
+              startedAt: new Date('2026-01-01T00:00:00.000Z'),
+              completedAt: null,
+              createdAt: new Date('2026-01-01T00:00:00.000Z'),
+              updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+            },
+            {
+              id: 'workflow_2',
+              userId: 'user_1',
+              uploadId: 'upload_2',
+              documentId: 'document_2',
+              workflowKey: 'ingestion',
+              status: WorkflowStatus.SUCCESS,
+              externalExecutionId: 'exec_456',
+              requestPayload: { prompt: 'secret-2' },
+              responsePayload: { ok: true },
+              metadata: null,
+              errorMessage: null,
+              startedAt: new Date('2026-01-01T00:03:00.000Z'),
+              completedAt: new Date('2026-01-01T00:04:00.000Z'),
+              createdAt: new Date('2026-01-01T00:03:00.000Z'),
+              updatedAt: new Date('2026-01-01T00:04:00.000Z'),
+            },
+          ]),
+          count: vi.fn().mockResolvedValue(2),
+          update: vi.fn().mockResolvedValue({
+            id: 'workflow_1',
+            userId: 'user_1',
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            workflowKey: 'ingestion',
+            status: WorkflowStatus.RUNNING,
+            externalExecutionId: 'exec_123',
+            requestPayload: { prompt: 'secret' },
+            responsePayload: null,
+            metadata: {
+              reconciliationRequired: true,
+              reconciliationHealth: 'degraded',
+              reconciliationIssue: 'UPSTREAM_UNAVAILABLE',
+              reconciliationSource: 'n8n_poll',
+              lastReconciliationAttemptAt: '2026-01-01T00:02:00.000Z',
+              lastReconciliationFailureAt: '2026-01-01T00:02:00.000Z',
+            },
+            errorMessage: null,
+            startedAt: new Date('2026-01-01T00:00:00.000Z'),
+            completedAt: null,
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-01T00:02:00.000Z'),
+          }),
+        },
+        upload: {
+          updateMany: vi.fn(),
+        },
+        document: {
+          updateMany: vi.fn(),
+        },
+      };
+      const executionService = {
+        pollExecution: vi.fn().mockRejectedValue(new Error('n8n unavailable')),
+      };
+      const service = new WorkflowService({
+        db: db as never,
+        executionService: executionService as never,
+      });
+
+      const result = await service.listPublicWorkflows('user_1');
+
+      expect(result).toEqual({
+        items: [
+          {
+            id: 'workflow_1',
+            workflowKey: 'ingestion',
+            status: 'RUNNING',
+            errorMessage: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            completedAt: null,
+            uploadId: 'upload_1',
+            documentId: 'document_1',
+            reconciliationRequired: true,
+          },
+          {
+            id: 'workflow_2',
+            workflowKey: 'ingestion',
+            status: 'SUCCESS',
+            errorMessage: null,
+            createdAt: '2026-01-01T00:03:00.000Z',
+            updatedAt: '2026-01-01T00:04:00.000Z',
+            startedAt: '2026-01-01T00:03:00.000Z',
+            completedAt: '2026-01-01T00:04:00.000Z',
+            uploadId: 'upload_2',
+            documentId: 'document_2',
+            reconciliationRequired: false,
+          },
+        ],
+        total: 2,
+      });
+      expect(executionService.pollExecution).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not let older workflow executions overwrite newer resource state during list reconciliation', async () => {

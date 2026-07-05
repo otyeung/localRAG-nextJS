@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { DocumentStatus, UploadStatus, WorkflowStatus, type WorkflowExecution } from '@prisma/client';
+import { Prisma, DocumentStatus, UploadStatus, WorkflowStatus, type WorkflowExecution } from '@prisma/client';
 
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
@@ -51,6 +51,10 @@ export type PublicWorkflowListResult = {
   items: PublicWorkflowExecutionDto[];
   total: number;
 };
+
+const RECONCILIATION_HEALTH_DEGRADED = 'degraded' as const;
+const RECONCILIATION_ISSUE_UPSTREAM_UNAVAILABLE = 'UPSTREAM_UNAVAILABLE' as const;
+const RECONCILIATION_SOURCE_N8N_POLL = 'n8n_poll' as const;
 
 export function mapN8nStatusToWorkflowStatus(status: string): WorkflowStatus {
   switch (status) {
@@ -123,6 +127,59 @@ function isReindexWorkflow(metadata: unknown): boolean {
   return metadata instanceof Object && 'operation' in metadata && metadata.operation === 'reindex';
 }
 
+function toMetadataRecord(metadata: unknown): Prisma.JsonObject | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+
+  return { ...(metadata as Prisma.JsonObject) };
+}
+
+function hasPollFailureMarker(metadata: unknown): boolean {
+  const record = toMetadataRecord(metadata);
+
+  if (!record) {
+    return false;
+  }
+
+  return (
+    record.reconciliationSource === RECONCILIATION_SOURCE_N8N_POLL ||
+    record.reconciliationIssue === RECONCILIATION_ISSUE_UPSTREAM_UNAVAILABLE ||
+    record.reconciliationHealth === RECONCILIATION_HEALTH_DEGRADED
+  );
+}
+
+function buildPollFailureMetadata(metadata: unknown, timestamp: string): Prisma.InputJsonObject {
+  return {
+    ...(toMetadataRecord(metadata) ?? {}),
+    reconciliationRequired: true,
+    reconciliationHealth: RECONCILIATION_HEALTH_DEGRADED,
+    reconciliationIssue: RECONCILIATION_ISSUE_UPSTREAM_UNAVAILABLE,
+    reconciliationSource: RECONCILIATION_SOURCE_N8N_POLL,
+    lastReconciliationAttemptAt: timestamp,
+    lastReconciliationFailureAt: timestamp,
+  } as Prisma.InputJsonObject;
+}
+
+function clearPollFailureMetadata(metadata: unknown): Prisma.InputJsonObject {
+  const record = toMetadataRecord(metadata);
+
+  if (!record) {
+    return {} as Prisma.InputJsonObject;
+  }
+
+  delete record.reconciliationHealth;
+  delete record.reconciliationIssue;
+  delete record.reconciliationSource;
+  delete record.lastReconciliationFailureAt;
+
+  if (!('localPersistenceError' in record)) {
+    delete record.reconciliationRequired;
+  }
+
+  return (Object.keys(record).length > 0 ? record : {}) as Prisma.InputJsonObject;
+}
+
 function isActiveWorkflowStatus(status: WorkflowStatus): boolean {
   return status === WorkflowStatus.RUNNING || status === WorkflowStatus.WAITING || status === WorkflowStatus.QUEUED;
 }
@@ -192,24 +249,29 @@ export class WorkflowService {
 
   private async reconcileWorkflow(userId: string, workflow: WorkflowExecution): Promise<WorkflowExecution> {
     if (workflow.externalExecutionId && isActiveWorkflowStatus(workflow.status)) {
-      const execution = await this.executionService.pollExecution(workflow.externalExecutionId);
-      const nextStatus = mapN8nStatusToWorkflowStatus(execution.status);
+      try {
+        const execution = await this.executionService.pollExecution(workflow.externalExecutionId);
+        const nextStatus = mapN8nStatusToWorkflowStatus(execution.status);
 
-      const updatedWorkflow = await this.db.workflowExecution.update({
-        where: { id: workflow.id },
-        data: {
-          status: nextStatus,
-          startedAt: execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt,
-          completedAt: execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt,
-          errorMessage: nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null,
-          ...(execution.data === null ? {} : { responsePayload: execution.data }),
-        },
-      });
+        const updatedWorkflow = await this.db.workflowExecution.update({
+          where: { id: workflow.id },
+          data: {
+            status: nextStatus,
+            startedAt: execution.startedAt ? new Date(execution.startedAt) : workflow.startedAt,
+            completedAt: execution.stoppedAt ? new Date(execution.stoppedAt) : workflow.completedAt,
+            errorMessage: nextStatus === WorkflowStatus.ERROR ? execution.rawStatus ?? 'Workflow failed.' : null,
+            ...(execution.data === null ? {} : { responsePayload: execution.data }),
+            ...(hasPollFailureMarker(workflow.metadata) ? { metadata: clearPollFailureMetadata(workflow.metadata) } : {}),
+          },
+        });
 
-      if (await this.shouldSyncResourceStatuses(userId, updatedWorkflow)) {
-        await this.syncResourceStatuses(userId, updatedWorkflow);
+        if (await this.shouldSyncResourceStatuses(userId, updatedWorkflow)) {
+          await this.syncResourceStatuses(userId, updatedWorkflow);
+        }
+        return updatedWorkflow;
+      } catch {
+        return this.persistRecoverablePollFailure(workflow);
       }
-      return updatedWorkflow;
     }
 
     if (isReconciliationRequired(workflow.metadata)) {
@@ -219,6 +281,24 @@ export class WorkflowService {
     }
 
     return workflow;
+  }
+
+  private async persistRecoverablePollFailure(workflow: WorkflowExecution): Promise<WorkflowExecution> {
+    const metadata = buildPollFailureMetadata(workflow.metadata, new Date().toISOString());
+
+    try {
+      return await this.db.workflowExecution.update({
+        where: { id: workflow.id },
+        data: {
+          metadata,
+        },
+      });
+    } catch {
+      return {
+        ...workflow,
+        metadata: metadata as unknown as Prisma.JsonValue,
+      };
+    }
   }
 
   private async shouldSyncResourceStatuses(userId: string, workflow: WorkflowExecution): Promise<boolean> {
