@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 import { createAnonymousCookieValue } from '@/lib/auth/anonymous-provider';
 
+const originalTrustProxyHeaders = process.env.TRUST_PROXY_HEADERS;
+const mutableProcessEnv = process.env as NodeJS.ProcessEnv & { TRUST_PROXY_HEADERS?: string };
+
 const routeMocks = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
   getForUser: vi.fn(),
@@ -33,6 +36,7 @@ import { GET, PATCH } from '@/app/api/settings/route';
 
 describe('settings route', () => {
   beforeEach(() => {
+    mutableProcessEnv.TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     routeMocks.getCurrentUser.mockReset();
     routeMocks.getForUser.mockReset();
     routeMocks.updateForUserWithAudit.mockReset();
@@ -81,7 +85,7 @@ describe('settings route', () => {
     expect(routeMocks.getForUser).toHaveBeenCalledWith('user_1');
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:context:unknown:vitest',
+      'settings:pre:get:anonymous',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -135,7 +139,7 @@ describe('settings route', () => {
     );
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:patch:context:unknown:vitest',
+      'settings:pre:patch:anonymous',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -198,7 +202,7 @@ describe('settings route', () => {
       },
     });
     expect(routeMocks.rateLimit).toHaveBeenCalledWith(
-      'settings:pre:get:context:unknown:unknown',
+      'settings:pre:get:anonymous',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -231,7 +235,7 @@ describe('settings route', () => {
     expect(routeMocks.updateForUserWithAudit).not.toHaveBeenCalled();
     expect(routeMocks.rateLimit).toHaveBeenCalledTimes(1);
     expect(routeMocks.rateLimit).toHaveBeenCalledWith(
-      'settings:pre:patch:context:unknown:vitest',
+      'settings:pre:patch:anonymous',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -274,7 +278,7 @@ describe('settings route', () => {
     expect(response.status).toBe(200);
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:context:unknown:vitest',
+      'settings:pre:get:anonymous',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -295,7 +299,65 @@ describe('settings route', () => {
     expect(response.status).toBe(200);
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:context:unknown:vitest',
+      'settings:pre:get:anonymous',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('uses the same shared pre-provision bucket for different user agents without a valid cookie', async () => {
+    const firstRequest = new Request('https://app.example.com/api/settings', {
+      headers: {
+        'x-request-id': 'req_browser_a',
+        'user-agent': 'browser-a',
+      },
+    });
+    const secondRequest = new Request('https://app.example.com/api/settings', {
+      headers: {
+        'x-request-id': 'req_browser_b',
+        'user-agent': 'browser-b',
+      },
+    });
+
+    const firstResponse = await GET(firstRequest);
+    const secondResponse = await GET(secondRequest);
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:get:anonymous',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      3,
+      'settings:pre:get:anonymous',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('uses the trusted client ip for the pre-provision rate-limit key when proxy headers are enabled', async () => {
+    mutableProcessEnv.TRUST_PROXY_HEADERS = 'true';
+
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        'x-forwarded-for': '203.0.113.10, 10.0.0.5',
+        'x-request-id': 'req_trusted_ip',
+        'user-agent': 'browser-a',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:get:ip:203.0.113.10',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),

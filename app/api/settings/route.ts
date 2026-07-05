@@ -42,7 +42,11 @@ function buildPreProvisionRateLimitKey(request: Request, requestContext: Request
     return `settings:pre:${method}:cookie:${anonymousFingerprint}`;
   }
 
-  return `settings:pre:${method}:context:${requestContext.ipAddress}:${requestContext.userAgent}`;
+  if (requestContext.ipAddress !== 'unknown') {
+    return `settings:pre:${method}:ip:${requestContext.ipAddress}`;
+  }
+
+  return `settings:pre:${method}:anonymous`;
 }
 
 async function enforcePreProvisionRateLimit(
