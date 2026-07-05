@@ -14,6 +14,10 @@ import { useHealth } from '@/hooks/use-health';
 import { useUploadQueue } from '@/hooks/use-upload-queue';
 
 type RightPanel = 'knowledge' | 'settings';
+type HealthTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+
+const TASK_9_PLACEHOLDER_COPY =
+  'The health route is expected in Task 9. This placeholder is already wired to consume it when available.';
 
 export function AppShell() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -81,15 +85,29 @@ export function AppShell() {
     }
   };
 
-  const healthLabel = health.data?.label ?? (health.isLoading ? 'Checking' : 'Pending Task 9');
-  const healthTone =
+  let healthLabel = health.data?.label ?? (health.isLoading ? 'Checking' : 'Pending Task 9');
+  let healthTone: HealthTone =
     health.data?.status === 'healthy'
       ? 'success'
-      : health.data?.status === 'degraded'
+      : health.data?.status === 'degraded' || health.data?.status === 'pending'
         ? 'warning'
-        : health.isError
-          ? 'danger'
-          : 'neutral';
+        : 'neutral';
+  let healthBody = TASK_9_PLACEHOLDER_COPY;
+
+  if (health.isError) {
+    healthLabel = 'Health unavailable';
+    healthTone = 'danger';
+    healthBody =
+      health.error instanceof Error && health.error.message
+        ? health.error.message
+        : 'The /api/health endpoint returned an error. Check the service and try again.';
+  } else if (health.isLoading) {
+    healthBody = 'Checking the /api/health endpoint for the latest system status.';
+  } else if (health.data?.supported === false) {
+    healthBody = TASK_9_PLACEHOLDER_COPY;
+  } else if (health.data?.services?.length === 0) {
+    healthBody = 'The health endpoint responded without per-service details.';
+  }
 
   return (
     <div className="min-h-screen bg-[color:var(--app-bg)] px-4 py-4 text-[color:var(--text-strong)] sm:px-5 lg:px-6">
@@ -136,6 +154,7 @@ export function AppShell() {
             onKnowledgeBase={() => setPanel('knowledge')}
             onSettings={() => setPanel('settings')}
             healthLabel={healthLabel}
+            healthTone={healthTone}
           />
 
           <main aria-label="Chat workspace" className="min-w-0">
@@ -207,8 +226,11 @@ export function AppShell() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-4 text-sm text-[color:var(--text-muted)]">
-                    The health route is expected in Task 9. This placeholder is already wired to consume it when available.
+                  <div
+                    role={health.isError ? 'alert' : undefined}
+                    className="rounded-2xl border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-4 text-sm text-[color:var(--text-muted)]"
+                  >
+                    {healthBody}
                   </div>
                 )}
               </div>

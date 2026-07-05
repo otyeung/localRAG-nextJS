@@ -46,6 +46,7 @@ describe('Sidebar', () => {
         onConversationRename: vi.fn(),
         onConversationDelete: vi.fn(),
         healthLabel: 'Pending Task 9',
+        healthTone: 'warning',
         totalConversations: 45,
         hasMoreConversations: true,
         onLoadMoreConversations: onLoadMore,
@@ -85,6 +86,7 @@ describe('Sidebar', () => {
         onKnowledgeBase: vi.fn(),
         onSettings: vi.fn(),
         healthLabel: 'Healthy',
+        healthTone: 'success',
       }),
     );
 
@@ -110,6 +112,7 @@ describe('Sidebar', () => {
         onConversationRename: vi.fn(),
         onConversationDelete: vi.fn(),
         healthLabel: 'Checking',
+        healthTone: 'neutral',
         isLoadingConversations: true,
       }),
     );
@@ -128,6 +131,7 @@ describe('Sidebar', () => {
         onConversationRename: vi.fn(),
         onConversationDelete: vi.fn(),
         healthLabel: 'Needs attention',
+        healthTone: 'danger',
         isLoadingConversations: false,
         conversationsError: 'Conversation service unavailable.',
       }),
@@ -135,5 +139,24 @@ describe('Sidebar', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Conversation service unavailable.');
     expect(screen.queryByText('No conversations match the current filters.')).not.toBeInTheDocument();
+  });
+
+  it('uses the provided health tone for the system badge', () => {
+    render(
+      createElement(Sidebar, {
+        activeConversationId: null,
+        conversations: [],
+        conversationSearchValue: '',
+        onConversationSearchChange: vi.fn(),
+        onConversationSelect: vi.fn(),
+        onNewChat: vi.fn(),
+        onConversationRename: vi.fn(),
+        onConversationDelete: vi.fn(),
+        healthLabel: 'Health unavailable',
+        healthTone: 'danger',
+      }),
+    );
+
+    expect(screen.getByText('Health unavailable').closest('span')).toHaveClass('text-rose-200');
   });
 });

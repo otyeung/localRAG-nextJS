@@ -7,6 +7,8 @@ import { StatusBadge } from '@/components/common/status-badge';
 import { ConversationList } from '@/components/sidebar/conversation-list';
 import type { ConversationSummary } from '@/hooks/use-conversations';
 
+type HealthTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+
 export function Sidebar({
   conversations,
   totalConversations = conversations.length,
@@ -25,6 +27,7 @@ export function Sidebar({
   onKnowledgeBase,
   onSettings,
   healthLabel,
+  healthTone,
 }: {
   conversations: ConversationSummary[];
   totalConversations?: number;
@@ -43,6 +46,7 @@ export function Sidebar({
   onKnowledgeBase?: () => void;
   onSettings?: () => void;
   healthLabel: string;
+  healthTone: HealthTone;
 }) {
   const [searchValue, setSearchValue] = useState(conversationSearchValue);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -107,7 +111,7 @@ export function Sidebar({
             </p>
             <h2 className="mt-2 font-display text-2xl text-[color:var(--text-strong)]">LocalRAG</h2>
           </div>
-          <StatusBadge label={healthLabel} tone={healthLabel === 'Healthy' ? 'success' : 'warning'} pulse />
+          <StatusBadge label={healthLabel} tone={healthTone} pulse={healthTone === 'success'} />
         </div>
 
         <button

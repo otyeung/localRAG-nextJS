@@ -2,7 +2,7 @@ const SAFE_PROTOCOLS = new Set(['http:', 'https:']);
 
 function isSafeRelativeUrl(url: string) {
   return (
-    url.startsWith('/') ||
+    (url.startsWith('/') && !url.startsWith('//')) ||
     url.startsWith('./') ||
     url.startsWith('../') ||
     url.startsWith('?') ||
