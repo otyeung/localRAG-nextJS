@@ -20,7 +20,8 @@ export function middleware(request: NextRequest): NextResponse {
   const scriptSrc = isDevelopment
     ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
     : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
-  const contentSecurityPolicy = `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none';`;
+  const connectSrc = isDevelopment ? "connect-src 'self' ws: wss:;" : "connect-src 'self'";
+  const contentSecurityPolicy = `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; ${connectSrc}; frame-ancestors 'none';`;
 
   forwardedHeaders.set('x-request-id', requestId);
   forwardedHeaders.set('x-nonce', nonce);

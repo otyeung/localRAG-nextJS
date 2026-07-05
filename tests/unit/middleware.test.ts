@@ -49,4 +49,32 @@ describe('middleware', () => {
 
     expect(scriptSrc).toBe("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
   });
+
+  it('allows websocket connections in development CSP', () => {
+    mutableProcessEnv.NODE_ENV = 'development';
+
+    const request = new Request('https://app.example.com/api/upload', {
+      headers: { 'x-request-id': 'request-123' },
+    }) as NextRequest;
+
+    const response = middleware(request);
+    const csp = response.headers.get('content-security-policy');
+    const connectSrc = csp?.match(/connect-src[^;]+/)?.[0] ?? '';
+
+    expect(connectSrc).toBe("connect-src 'self' ws: wss:");
+  });
+
+  it('keeps production connect-src strict', () => {
+    mutableProcessEnv.NODE_ENV = 'production';
+
+    const request = new Request('https://app.example.com/api/upload', {
+      headers: { 'x-request-id': 'request-123' },
+    }) as NextRequest;
+
+    const response = middleware(request);
+    const csp = response.headers.get('content-security-policy');
+    const connectSrc = csp?.match(/connect-src[^;]+/)?.[0] ?? '';
+
+    expect(connectSrc).toBe("connect-src 'self'");
+  });
 });
