@@ -14,15 +14,18 @@ export function assertSameOrigin(request: Request): void {
     return;
   }
 
-  let originHost: string;
+  const requestUrl = new URL(request.url);
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  const effectiveOrigin = `${forwardedProto ?? requestUrl.protocol.slice(0, -1)}://${host}`;
+  let requestOrigin: string;
 
   try {
-    originHost = new URL(origin).host;
+    requestOrigin = new URL(origin).origin;
   } catch {
     throw new AppError('FORBIDDEN', 'Cross-origin mutation rejected.');
   }
 
-  if (originHost !== host) {
+  if (requestOrigin !== effectiveOrigin) {
     throw new AppError('FORBIDDEN', 'Cross-origin mutation rejected.');
   }
 }

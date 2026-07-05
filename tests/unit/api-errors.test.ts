@@ -12,10 +12,10 @@ describe('AppError', () => {
   });
 
   it('converts unknown errors to internal errors', () => {
-    const error = toAppError(new Error('Boom'));
+    const error = toAppError(new Error('Boom: database password=secret'));
 
     expect(error.code).toBe('INTERNAL_ERROR');
-    expect(error.message).toBe('Boom');
+    expect(error.message).toBe('An unexpected error occurred.');
   });
 });
 
@@ -37,6 +37,19 @@ describe('json response helpers', () => {
         message: 'Denied',
         requestId: 'request-1',
         details: { scope: 'admin' },
+      },
+    });
+  });
+
+  it('does not expose internal error details', async () => {
+    const response = jsonError(toAppError(new Error('Boom: database password=secret')), 'request-2');
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred.',
+        requestId: 'request-2',
       },
     });
   });

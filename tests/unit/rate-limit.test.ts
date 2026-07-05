@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { rateLimit } from '@/lib/security/rate-limit';
+import {
+  clearRateLimitBucketsForTests,
+  getRateLimitBucketCountForTests,
+  rateLimit,
+} from '@/lib/security/rate-limit';
 
 describe('rateLimit', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    clearRateLimitBucketsForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    clearRateLimitBucketsForTests();
   });
 
   it('allows requests within the configured window', async () => {
@@ -45,5 +51,18 @@ describe('rateLimit', () => {
       remaining: 0,
       resetAt: new Date('2026-07-05T00:00:02.500Z'),
     });
+  });
+
+  it('evicts expired unrelated buckets during calls', async () => {
+    const policy = { limit: 1, windowMs: 1_000 };
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.000Z'));
+    await rateLimit('ip-expired-1', policy);
+    await rateLimit('ip-expired-2', policy);
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:01.500Z'));
+    await rateLimit('ip-active', policy);
+
+    expect(getRateLimitBucketCountForTests()).toBe(1);
   });
 });
