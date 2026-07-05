@@ -11,6 +11,7 @@ import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { N8nIngestionService } from '@/lib/n8n/ingestion';
+import { isAmbiguousN8nWebhookStartError } from '@/lib/n8n/errors';
 import { UploadValidationService } from '@/lib/services/upload-validation-service';
 import { VirusScanService } from '@/lib/services/virus-scan-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
@@ -209,6 +210,61 @@ export class UploadService {
       });
     } catch (error) {
       const failureMessage = errorMessage(error);
+
+      if (isAmbiguousN8nWebhookStartError(error)) {
+        const reconciledWorkflow = await this.transactionRunner.$transaction(async (transaction: AcceptedUploadStateTransactionDb) =>
+          this.createAcceptedUploadState(transaction, {
+            uploadId,
+            documentId,
+            workflowExecutionId,
+            userId: input.userId,
+            fileName: input.fileName,
+            mimeType: validation.normalizedMimeType,
+            fileSizeBytes: input.bytes.byteLength,
+            fileHash,
+            storagePath,
+            nextWorkflowStatus: WorkflowStatus.QUEUED,
+            externalExecutionId: null,
+            errorMessage: failureMessage,
+            workflowMetadataOverrides: {
+              reconciliationRequired: true,
+            },
+          }),
+        );
+
+        try {
+          await this.db.auditLog.create({
+            data: {
+              userId: input.userId,
+              action: 'upload.ingestion_reconciliation_required',
+              entityType: 'upload',
+              entityId: uploadId,
+              requestId: input.requestId,
+              ipAddress: input.ipAddress,
+              userAgent: input.userAgent,
+              metadata: {
+                documentId,
+                workflowExecutionId,
+                externalExecutionId: null,
+                error: failureMessage,
+              },
+            },
+          });
+        } catch {
+          // Keep the persisted reconciliation marker even if the follow-up audit write fails.
+        }
+
+        return {
+          uploadId,
+          documentId,
+          workflowExecutionId,
+          externalExecutionId: reconciledWorkflow.externalExecutionId,
+          status: reconciledWorkflow.status,
+          storagePath,
+          reconciliationRequired: true,
+        };
+      }
+
       try {
         await this.db.auditLog.create({
           data: {
@@ -248,7 +304,8 @@ export class UploadService {
           fileHash,
           storagePath,
           nextWorkflowStatus,
-          startResult,
+          externalExecutionId: startResult.executionId,
+          workflowId: startResult.workflowId,
         });
 
         await transaction.auditLog.create({
@@ -294,7 +351,8 @@ export class UploadService {
           fileHash,
           storagePath,
           nextWorkflowStatus,
-          startResult,
+          externalExecutionId: startResult.executionId,
+          workflowId: startResult.workflowId,
           workflowMetadataOverrides: {
             reconciliationRequired: true,
             localPersistenceError,
@@ -376,7 +434,9 @@ export class UploadService {
       fileHash: string;
       storagePath: string;
       nextWorkflowStatus: WorkflowStatus;
-      startResult: Awaited<ReturnType<Pick<N8nIngestionService, 'startDocumentIngestion'>['startDocumentIngestion']>>;
+      externalExecutionId: string | null;
+      workflowId?: string | null;
+      errorMessage?: string;
       workflowMetadataOverrides?: Record<string, unknown>;
     },
   ): Promise<{
@@ -419,9 +479,10 @@ export class UploadService {
         uploadId: input.uploadId,
         documentId: input.documentId,
         workflowKey: 'ingestion',
-        externalExecutionId: input.startResult.executionId,
+        externalExecutionId: input.externalExecutionId,
         status: input.nextWorkflowStatus,
-        metadata: buildAcceptedWorkflowMetadata(input.startResult.workflowId, input.workflowMetadataOverrides),
+        ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+        metadata: buildAcceptedWorkflowMetadata(input.workflowId, input.workflowMetadataOverrides),
       },
     });
   }

@@ -131,6 +131,27 @@ describe('N8nClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('does not retry webhook starts when retry is disabled for the request', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+
+    const client = new N8nClient({
+      baseUrl: 'http://n8n:5678',
+      apiKey: 'secret',
+      timeoutMs: 1000,
+      retryCount: 2,
+      retryDelayMs: 1,
+      fetchFn: fetchMock,
+    });
+
+    await expect(
+      client.post('/webhook/ingestion', {
+        body: { documentId: 'doc_1' },
+        retry: false,
+      }),
+    ).rejects.toBeInstanceOf(N8nError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('retries abort style failures and surfaces N8nError after attempts', async () => {
     const fetchMock = vi.fn().mockRejectedValue(
       new DOMException('The operation was aborted.', 'AbortError'),
@@ -252,6 +273,7 @@ describe('N8nClient', () => {
         mimeType: 'application/pdf',
       },
       requestId: undefined,
+      retry: false,
       schema: expect.any(Object),
     });
   });

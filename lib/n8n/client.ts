@@ -31,6 +31,7 @@ export type N8nRequest<T> = {
   headers?: Record<string, string>;
   requestId?: string;
   schema?: z.ZodType<T>;
+  retry?: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -97,8 +98,9 @@ export class N8nClient {
     this.ensureRequiredConfiguration(input.path);
 
     let lastError: unknown;
+    const retryCount = input.retry === false ? 0 : this.options.retryCount;
 
-    for (let attempt = 0; attempt <= this.options.retryCount; attempt += 1) {
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
       try {
         const result = await this.performRequest(input);
         this.consecutiveFailures = 0;
@@ -108,7 +110,7 @@ export class N8nClient {
         lastError = error;
         const retryable = isRetryableError(error);
 
-        if (!retryable || attempt === this.options.retryCount) {
+        if (!retryable || attempt === retryCount) {
           this.recordFailure(error, input, attempt + 1);
           throw error;
         }
@@ -127,7 +129,7 @@ export class N8nClient {
       }
     }
 
-    this.recordFailure(lastError, input, this.options.retryCount + 1);
+    this.recordFailure(lastError, input, retryCount + 1);
     throw toN8nError(lastError, 'n8n request failed.');
   }
 

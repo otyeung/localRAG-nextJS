@@ -61,6 +61,7 @@ export class N8nWorkflowService {
       return await this.client.post(`/webhook/${entrypointPath}`, {
         body: input.payload,
         requestId: input.requestId,
+        retry: false,
         schema: workflowStartResponseSchema,
       });
     } catch (error) {

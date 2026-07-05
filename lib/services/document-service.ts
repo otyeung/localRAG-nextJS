@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/http/api-errors';
 import { N8nIngestionService } from '@/lib/n8n/ingestion';
+import { isAmbiguousN8nWebhookStartError } from '@/lib/n8n/errors';
 import type { N8nWorkflowStartResult } from '@/lib/n8n/types';
 import type { AuditEventInput } from '@/lib/services/audit-service';
 import { mapN8nStatusToWorkflowStatus } from '@/lib/services/workflow-service';
@@ -480,6 +481,48 @@ export class DocumentService {
       });
     } catch (error) {
       const startFailureMessage = errorMessage(error);
+
+      if (isAmbiguousN8nWebhookStartError(error)) {
+        const workflow = await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) =>
+          transaction.workflowExecution.update({
+            where: { id: workflowExecutionId },
+            data: {
+              status: WorkflowStatus.QUEUED,
+              externalExecutionId: null,
+              errorMessage: startFailureMessage,
+              metadata: buildReindexWorkflowMetadata(document.status, {
+                reconciliationRequired: true,
+              }),
+            },
+          }),
+        );
+
+        try {
+          await this.db.auditLog.create({
+            data: {
+              userId,
+              action: 'document.reindex_reconciliation_required',
+              entityType: 'document',
+              entityId: document.id,
+              requestId,
+              metadata: {
+                workflowExecutionId,
+                externalExecutionId: null,
+                uploadId: document.uploadId,
+                error: startFailureMessage,
+              },
+            },
+          });
+        } catch {
+          // Keep the persisted reconciliation marker even if the follow-up audit write fails.
+        }
+
+        return {
+          workflowExecutionId: workflow.id,
+          externalExecutionId: workflow.externalExecutionId,
+          status: workflow.status,
+        };
+      }
 
       try {
         await this.transactionRunner.$transaction(async (transaction: DocumentTransactionDb) => {

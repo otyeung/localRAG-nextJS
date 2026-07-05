@@ -37,3 +37,15 @@ export function toN8nError(error: unknown, fallbackMessage: string): N8nError {
     cause: error,
   });
 }
+
+export function isAmbiguousN8nWebhookStartError(error: unknown): boolean {
+  if (!(error instanceof N8nError) || typeof error.details !== 'object' || error.details === null) {
+    return false;
+  }
+
+  const details = error.details as {
+    kind?: string;
+  };
+
+  return details.kind === 'transport' || details.kind === 'timeout';
+}

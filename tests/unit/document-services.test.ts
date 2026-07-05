@@ -9,6 +9,7 @@ vi.mock('@/lib/db/prisma', () => ({
 
 import { DocumentStatus, UploadStatus, WorkflowStatus } from '@prisma/client';
 
+import { N8nError } from '@/lib/n8n/errors';
 import { UploadService } from '@/lib/services/upload-service';
 import { DocumentService } from '@/lib/services/document-service';
 import { WorkflowService } from '@/lib/services/workflow-service';
@@ -286,6 +287,115 @@ describe('document services', () => {
         },
       },
     });
+  });
+  it('returns reconciliation-required upload handles when webhook start failure is ambiguous', async () => {
+    const acceptedTx = {
+      upload: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+      document: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+      workflowExecution: {
+        create: vi.fn().mockResolvedValue({
+          id: 'workflow_1',
+          status: WorkflowStatus.QUEUED,
+          externalExecutionId: null,
+        }),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation(async (callback: (transaction: typeof acceptedTx) => Promise<unknown>) =>
+        callback(acceptedTx),
+      ),
+      upload: {
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      workflowExecution: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const service = new UploadService({
+      db: db as never,
+      validationService: {
+        validate: vi.fn().mockResolvedValue({
+          normalizedExtension: 'pdf',
+          normalizedMimeType: 'application/pdf',
+        }),
+      } as never,
+      virusScanService: {
+        scanFile: vi.fn().mockResolvedValue({ clean: true, scanner: 'local-noop' }),
+      } as never,
+      ingestionService: {
+        startDocumentIngestion: vi.fn().mockRejectedValue(
+          new N8nError('n8n request timed out.', {
+            kind: 'timeout',
+            retryable: true,
+          }),
+        ),
+      } as never,
+      uploadConfig: {
+        maxBytes: 10_000_000,
+        tempDirectory: uploadTestDirectory,
+      },
+    });
+
+    const result = await service.createUpload({
+      userId: 'user_1',
+      fileName: 'Quarterly Report.PDF',
+      mimeType: 'application/pdf',
+      bytes: Buffer.from('hello world'),
+      requestId: 'req_upload_ambiguous',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+    });
+
+    expect(result).toMatchObject({
+      uploadId: expect.any(String),
+      documentId: expect.any(String),
+      workflowExecutionId: expect.any(String),
+      externalExecutionId: null,
+      status: 'QUEUED',
+      reconciliationRequired: true,
+    });
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(acceptedTx.workflowExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: result.workflowExecutionId,
+        externalExecutionId: null,
+        status: WorkflowStatus.QUEUED,
+        metadata: {
+          reconciliationRequired: true,
+        },
+      }),
+    });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'upload.ingestion_reconciliation_required',
+        entityType: 'upload',
+        entityId: result.uploadId,
+        requestId: 'req_upload_ambiguous',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: {
+          documentId: result.documentId,
+          workflowExecutionId: result.workflowExecutionId,
+          externalExecutionId: null,
+          error: 'n8n request timed out.',
+        },
+      },
+    });
+    expect(existsSync(result.storagePath)).toBe(true);
   });
   it('fails the upload start-failure audit when the audit write fails', async () => {
     const db = {
@@ -1671,6 +1781,178 @@ describe('document services', () => {
           workflowId: 'workflow_123',
           reconciliationRequired: true,
           localPersistenceError: 'audit write failed',
+        },
+      },
+    });
+    expect(ingestionService.startDocumentIngestion).toHaveBeenCalledTimes(1);
+  });
+  it('returns a reconciliation-required reindex handle and keeps the guard when start failure is ambiguous', async () => {
+    const sharedWorkflow = {
+      id: 'workflow_queued',
+      userId: 'user_1',
+      documentId: 'document_1',
+      uploadId: 'upload_1',
+      workflowKey: 'ingestion',
+      status: WorkflowStatus.QUEUED,
+      externalExecutionId: null as string | null,
+      metadata: {
+        operation: 'reindex',
+        previousDocumentStatus: DocumentStatus.READY,
+      },
+      errorMessage: null as string | null,
+    };
+    const initialTx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockImplementation(async ({ data }: { data: typeof sharedWorkflow }) => {
+          Object.assign(sharedWorkflow, {
+            ...data,
+            externalExecutionId: data.externalExecutionId ?? null,
+            errorMessage: null,
+          });
+          return { ...sharedWorkflow };
+        }),
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const ambiguousFailureTx = {
+      workflowExecution: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn().mockImplementation(
+          async ({
+            data,
+          }: {
+            data: {
+              status: WorkflowStatus;
+              externalExecutionId?: string | null;
+              errorMessage: string;
+              metadata: typeof sharedWorkflow.metadata & { reconciliationRequired: true };
+            };
+          }) => {
+            Object.assign(sharedWorkflow, {
+              status: data.status,
+              externalExecutionId: data.externalExecutionId ?? null,
+              errorMessage: data.errorMessage,
+              metadata: data.metadata,
+            });
+            return { ...sharedWorkflow };
+          },
+        ),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const conflictTx = {
+      workflowExecution: {
+        findFirst: vi.fn().mockImplementation(async () => ({
+          id: sharedWorkflow.id,
+          status: sharedWorkflow.status,
+          externalExecutionId: sharedWorkflow.externalExecutionId,
+        })),
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const db = {
+      workflowExecution: {
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document_1',
+          userId: 'user_1',
+          uploadId: 'upload_1',
+          status: DocumentStatus.READY,
+          title: 'Quarterly Report',
+          originalFilename: 'quarterly-report.pdf',
+          mimeType: 'application/pdf',
+          storagePath: '/uploads/quarterly-report.pdf',
+          deletedAt: null,
+        }),
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce(async (callback: (transaction: typeof initialTx) => Promise<unknown>) => callback(initialTx))
+        .mockImplementationOnce(async (callback: (transaction: typeof ambiguousFailureTx) => Promise<unknown>) =>
+          callback(ambiguousFailureTx),
+        )
+        .mockImplementationOnce(async (callback: (transaction: typeof conflictTx) => Promise<unknown>) => callback(conflictTx)),
+    };
+    const ingestionService = {
+      startDocumentIngestion: vi.fn().mockRejectedValue(
+        new N8nError('n8n request timed out.', {
+          kind: 'timeout',
+          retryable: true,
+        }),
+      ),
+    };
+    const service = new DocumentService({
+      db: db as never,
+      ingestionService: ingestionService as never,
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex_1')).resolves.toEqual({
+      workflowExecutionId: expect.any(String),
+      externalExecutionId: null,
+      status: 'QUEUED',
+    });
+
+    await expect(service.requestReindex('user_1', 'document_1', 'req_reindex_2')).rejects.toMatchObject({
+      code: 'CONFLICT',
+      details: {
+        reason: 'ACTIVE_WORKFLOW',
+        workflowExecutionId: sharedWorkflow.id,
+        workflowStatus: WorkflowStatus.QUEUED,
+      },
+    });
+
+    expect(ambiguousFailureTx.workflowExecution.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: {
+        status: WorkflowStatus.QUEUED,
+        externalExecutionId: null,
+        errorMessage: 'n8n request timed out.',
+        metadata: {
+          operation: 'reindex',
+          previousDocumentStatus: DocumentStatus.READY,
+          reconciliationRequired: true,
+        },
+      },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user_1',
+        action: 'document.reindex_reconciliation_required',
+        entityType: 'document',
+        entityId: 'document_1',
+        requestId: 'req_reindex_1',
+        metadata: {
+          workflowExecutionId: sharedWorkflow.id,
+          externalExecutionId: null,
+          uploadId: 'upload_1',
+          error: 'n8n request timed out.',
         },
       },
     });
