@@ -10,6 +10,7 @@ vi.mock('@/lib/logger/logger', () => ({
   },
 }));
 
+import { N8nIngestionService } from '@/lib/n8n/ingestion';
 import { N8nClient } from '@/lib/n8n/client';
 import { N8nError } from '@/lib/n8n/errors';
 import { N8nWorkflowService } from '@/lib/n8n/workflow';
@@ -90,6 +91,41 @@ describe('N8nClient', () => {
     expect(client.get).toHaveBeenNthCalledWith(2, '/api/v1/workflows', {
       query: { active: 'true', cursor: 'cursor_2' },
       requestId: 'req_456',
+      schema: expect.any(Object),
+    });
+  });
+
+  it('starts document ingestion on the ingestion webhook path', async () => {
+    const client = {
+      post: vi.fn().mockResolvedValue({
+        executionId: 'exec_123',
+        workflowId: 'workflow_123',
+      }),
+    };
+
+    const service = new N8nIngestionService(client as never);
+
+    await expect(
+      service.startDocumentIngestion({
+        documentId: 'doc_1',
+        uploadId: 'upload_1',
+        filePath: 'uploads/doc.pdf',
+        fileName: 'doc.pdf',
+        mimeType: 'application/pdf',
+      }),
+    ).resolves.toMatchObject({
+      executionId: 'exec_123',
+      workflowId: 'workflow_123',
+    });
+    expect(client.post).toHaveBeenCalledWith('/webhook/ingestion', {
+      body: {
+        documentId: 'doc_1',
+        uploadId: 'upload_1',
+        filePath: 'uploads/doc.pdf',
+        fileName: 'doc.pdf',
+        mimeType: 'application/pdf',
+      },
+      requestId: undefined,
       schema: expect.any(Object),
     });
   });

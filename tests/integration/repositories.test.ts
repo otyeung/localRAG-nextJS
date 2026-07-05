@@ -88,7 +88,7 @@ describe('repository layer', () => {
 
   it('creates workflow execution records with queue defaults', async () => {
     const db = createDb();
-    const expectedWorkflow = { id: 'workflow_1', workflowKey: 'document-ingestion' };
+    const expectedWorkflow = { id: 'workflow_1', workflowKey: 'ingestion' };
     db.workflowExecution.create.mockResolvedValue(expectedWorkflow);
 
     const repository = new WorkflowRepository(db as never);
@@ -98,7 +98,7 @@ describe('repository layer', () => {
         userId: 'user_1',
         uploadId: 'upload_1',
         documentId: 'document_1',
-        workflowKey: 'document-ingestion',
+        workflowKey: 'ingestion',
         metadata: { correlationId: 'req_1' },
       }),
     ).resolves.toEqual(expectedWorkflow);
@@ -108,7 +108,7 @@ describe('repository layer', () => {
         userId: 'user_1',
         uploadId: 'upload_1',
         documentId: 'document_1',
-        workflowKey: 'document-ingestion',
+        workflowKey: 'ingestion',
         status: 'QUEUED',
         metadata: { correlationId: 'req_1' },
       },

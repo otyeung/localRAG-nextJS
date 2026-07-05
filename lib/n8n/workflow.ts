@@ -11,7 +11,7 @@ import {
   type N8nWorkflowStartResult,
 } from '@/lib/n8n/types';
 
-export const N8N_DOCUMENT_INGESTION_WORKFLOW_KEY = 'document-ingestion';
+export const N8N_DOCUMENT_INGESTION_WORKFLOW_KEY = 'ingestion';
 export const N8N_RETRIEVAL_WORKFLOW_KEY = 'retrieval';
 
 export type StartWorkflowInput = {
