@@ -19,6 +19,7 @@ describe('UploadDropzone', () => {
             progress: 56,
             status: 'uploading',
             errorMessage: null,
+            isRetryable: false,
           },
           {
             id: 'upload_2',
@@ -27,6 +28,7 @@ describe('UploadDropzone', () => {
             progress: 0,
             status: 'error',
             errorMessage: 'Unsupported file type.',
+            isRetryable: false,
           },
         ],
         onFilesSelected,
@@ -63,7 +65,7 @@ describe('UploadDropzone', () => {
     expect(onFilesSelected).toHaveBeenCalledTimes(2);
     expect(screen.getByText('quarterly-report.pdf')).toBeInTheDocument();
     expect(screen.getByText('Unsupported file type.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry upload for malware.exe' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry upload for malware.exe' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel upload for quarterly-report.pdf' })).toBeInTheDocument();
   });
 });

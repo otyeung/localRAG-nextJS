@@ -27,6 +27,7 @@ export type UploadQueueItem = {
   progress: number;
   status: 'queued' | 'uploading' | 'success' | 'error' | 'canceled';
   errorMessage: string | null;
+  isRetryable: boolean;
   file?: File;
 };
 
@@ -163,7 +164,9 @@ export function useUploadQueue() {
       requestsRef.current.delete(variables.id);
       setQueue((items) =>
         items.map((item) =>
-          item.id === variables.id ? { ...item, progress: 100, status: 'success', errorMessage: null } : item,
+          item.id === variables.id
+            ? { ...item, progress: 100, status: 'success', errorMessage: null, isRetryable: false }
+            : item,
         ),
       );
       await finalizeUpload();
@@ -173,11 +176,19 @@ export function useUploadQueue() {
       setQueue((items) =>
         items.map((item) =>
           item.id === variables.id
-            ? {
-                ...item,
-                status: error.message === 'Upload canceled.' ? 'canceled' : 'error',
-                errorMessage: error.message === 'Upload canceled.' ? null : error.message,
-              }
+            ? error.message === 'Upload canceled.'
+              ? {
+                  ...item,
+                  status: 'canceled',
+                  errorMessage: null,
+                  isRetryable: false,
+                }
+              : {
+                  ...item,
+                  status: 'error',
+                  errorMessage: error.message,
+                  isRetryable: true,
+                }
             : item,
         ),
       );
@@ -192,7 +203,9 @@ export function useUploadQueue() {
 
       setQueue((items) =>
         items.map((entry) =>
-          entry.id === item.id ? { ...entry, status: 'uploading', progress: 0, errorMessage: null } : entry,
+          entry.id === item.id
+            ? { ...entry, status: 'uploading', progress: 0, errorMessage: null, isRetryable: false }
+            : entry,
         ),
       );
       uploadMutation.mutate({ id: item.id, file: item.file });
@@ -213,6 +226,7 @@ export function useUploadQueue() {
           progress: 0,
           status: errorMessage ? 'error' : 'queued',
           errorMessage,
+          isRetryable: false,
           file,
         };
       });
@@ -237,6 +251,23 @@ export function useUploadQueue() {
     (id: string) => {
       const item = queue.find((entry) => entry.id === id);
       if (!item?.file) {
+        return;
+      }
+
+      const errorMessage = validateFile(item.file);
+      if (errorMessage) {
+        setQueue((items) =>
+          items.map((entry) =>
+            entry.id === id
+              ? {
+                  ...entry,
+                  status: 'error',
+                  errorMessage,
+                  isRetryable: false,
+                }
+              : entry,
+          ),
+        );
         return;
       }
 

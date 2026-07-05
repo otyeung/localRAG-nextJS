@@ -39,31 +39,41 @@ export function ChatView({
 }) {
   const [draft, setDraft] = useState('');
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [localConversationId, setLocalConversationId] = useState<string | null>(initialConversationId);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pendingHydrationConversationIdRef = useRef<string | null>(initialConversationId);
   const pendingResolvedConversationIdRef = useRef<string | null>(null);
+  const currentConversationIdRef = useRef<string | null>(initialConversationId);
   const queryClient = useQueryClient();
+
+  const adoptConversationId = useCallback((conversationId: string | null) => {
+    currentConversationIdRef.current = conversationId;
+    setLocalConversationId(conversationId);
+  }, []);
+
   const syncConversationCaches = useCallback(
     async (resolvedConversationId: string | null) => {
+      if (resolvedConversationId && resolvedConversationId !== currentConversationIdRef.current) {
+        adoptConversationId(resolvedConversationId);
+        pendingHydrationConversationIdRef.current = resolvedConversationId;
+        onConversationResolved?.(resolvedConversationId);
+      }
+
       await queryClient.invalidateQueries({ queryKey: ['conversations'] });
 
-      const targetConversationId = resolvedConversationId ?? initialConversationId;
+      const targetConversationId = resolvedConversationId ?? currentConversationIdRef.current;
       if (targetConversationId) {
         await queryClient.invalidateQueries({ queryKey: ['messages', targetConversationId] });
       }
-
-      if (resolvedConversationId && resolvedConversationId !== initialConversationId) {
-        onConversationResolved?.(resolvedConversationId);
-      }
     },
-    [initialConversationId, onConversationResolved, queryClient],
+    [adoptConversationId, onConversationResolved, queryClient],
   );
   const transport = useMemo(
     () =>
       new DefaultChatTransport<ChatMessage>({
         api: '/api/chat',
         body: {
-          conversationId: initialConversationId,
+          conversationId: localConversationId,
         },
         fetch: async (input, init) => {
           const response = await fetch(input, init);
@@ -75,7 +85,7 @@ export function ChatView({
           return response;
         },
       }),
-    [initialConversationId],
+    [localConversationId],
   );
   const {
     messages,
@@ -87,7 +97,7 @@ export function ChatView({
     error,
     clearError,
   } = useChat<ChatMessage>({
-    id: initialConversationId ?? 'new-chat',
+    id: localConversationId ?? 'new-chat',
     transport,
     onFinish: ({ isAbort, isError }) => {
       const resolvedConversationId = pendingResolvedConversationIdRef.current;
@@ -104,7 +114,7 @@ export function ChatView({
       void syncConversationCaches(resolvedConversationId);
     },
   });
-  const conversationMessages = useConversationMessages(initialConversationId);
+  const conversationMessages = useConversationMessages(localConversationId);
   const userSettings = useUserSettings();
 
   const latestAssistant = useMemo(() => getLatestAssistant(messages), [messages]);
@@ -116,31 +126,32 @@ export function ChatView({
   const showReasoningMetadata = userSettings.data?.showReasoningMetadata ?? true;
 
   useEffect(() => {
+    adoptConversationId(initialConversationId);
     pendingHydrationConversationIdRef.current = initialConversationId;
-  }, [initialConversationId]);
+  }, [adoptConversationId, initialConversationId]);
 
   useEffect(() => {
-    if (!initialConversationId || conversationMessages.isSuccess || messages.length === 0) {
+    if (!localConversationId || conversationMessages.isSuccess || messages.length === 0) {
       return;
     }
 
-    if (pendingHydrationConversationIdRef.current === initialConversationId) {
+    if (pendingHydrationConversationIdRef.current === localConversationId) {
       pendingHydrationConversationIdRef.current = null;
     }
-  }, [conversationMessages.isSuccess, initialConversationId, messages.length]);
+  }, [conversationMessages.isSuccess, localConversationId, messages.length]);
 
   useEffect(() => {
-    if (!initialConversationId || !conversationMessages.isSuccess || isStreaming) {
+    if (!localConversationId || !conversationMessages.isSuccess || isStreaming) {
       return;
     }
 
-    if (pendingHydrationConversationIdRef.current !== initialConversationId) {
+    if (pendingHydrationConversationIdRef.current !== localConversationId) {
       return;
     }
 
     setMessages(conversationMessages.data);
     pendingHydrationConversationIdRef.current = null;
-  }, [conversationMessages.data, conversationMessages.isSuccess, initialConversationId, isStreaming, setMessages]);
+  }, [conversationMessages.data, conversationMessages.isSuccess, isStreaming, localConversationId, setMessages]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -169,7 +180,7 @@ export function ChatView({
       { text: nextDraft },
       {
         body: {
-          conversationId: initialConversationId,
+          conversationId: currentConversationIdRef.current,
         },
       },
     );
@@ -271,7 +282,7 @@ export function ChatView({
             onRetry={retryMessage}
             showReasoningMetadata={showReasoningMetadata}
           />
-        ) : initialConversationId && conversationMessages.isLoading ? (
+        ) : localConversationId && conversationMessages.isLoading ? (
           <div className="flex h-full min-h-[22rem] items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center text-sm text-[color:var(--text-muted)]">
             Loading saved transcript…
           </div>

@@ -119,7 +119,7 @@ export function UploadDropzone({
                   <p className="mt-1 text-xs text-[color:var(--text-dim)]">{formatBytes(item.size)}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {item.status === 'error' ? (
+                  {item.status === 'error' && item.isRetryable ? (
                     <button
                       type="button"
                       className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-xs font-medium text-[color:var(--text-muted)] transition hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-strong)]"
