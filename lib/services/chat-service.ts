@@ -1,8 +1,9 @@
 import 'server-only';
 
-import { AgentRunStatus, ConversationStatus, MessageRole, type Prisma } from '@prisma/client';
+import { AgentRunStatus, ConversationStatus, MessageRole, Prisma } from '@prisma/client';
 import { run, type Agent, type AgentInputItem, type StreamedRunResult } from '@openai/agents';
 import { createAiSdkUiMessageStreamResponse } from '@openai/agents-extensions/ai-sdk-ui';
+import { z } from 'zod';
 
 import { agentRegistry, defaultAgentName } from '@/agents/registry';
 import type { AgentToolRuntimeContext } from '@/agents/tools/shared';
@@ -21,6 +22,28 @@ import { WorkflowService } from '@/lib/services/workflow-service';
 type ChatDb = Pick<typeof prisma, '$transaction' | 'conversation' | 'message' | 'agentRun' | 'toolCall' | 'auditLog'>;
 type ChatTransactionDb = Prisma.TransactionClient;
 type ChatAgent = Agent<AgentToolRuntimeContext, any>;
+type AssistantCitation = {
+  toolCallId?: string;
+  chunkId: string;
+  documentId: string;
+  documentName: string;
+  chunkIndex: number;
+  score: number;
+  snippet: string;
+};
+
+const retrieveChunksToolResultSchema = z.object({
+  chunks: z.array(
+    z.object({
+      id: z.string(),
+      documentId: z.string(),
+      documentName: z.string(),
+      chunkIndex: z.number().int(),
+      content: z.string(),
+      score: z.number(),
+    }),
+  ),
+});
 
 type ChatStreamRunner = (
   agent: ChatAgent,
@@ -68,6 +91,53 @@ function getLatestUserMessage(messages: AppUiMessage[]): AppUiMessage | undefine
 
 function getAssistantText(stream: StreamedRunResult<AgentToolRuntimeContext, ChatAgent>): string {
   return typeof stream.finalOutput === 'string' ? stream.finalOutput.trim() : '';
+}
+
+function toCitationSnippet(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (normalized.length <= 280) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 279).trimEnd()}…`;
+}
+
+function extractAssistantCitations(
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    result: Prisma.JsonValue;
+  }>,
+): AssistantCitation[] {
+  const citations: AssistantCitation[] = [];
+  const seen = new Set<string>();
+
+  for (const toolCall of toolCalls) {
+    const parsedResult = retrieveChunksToolResultSchema.safeParse(toolCall.result);
+    if (!parsedResult.success) {
+      continue;
+    }
+
+    for (const chunk of parsedResult.data.chunks) {
+      const citationKey = `${toolCall.id}:${chunk.id}`;
+      if (seen.has(citationKey)) {
+        continue;
+      }
+
+      seen.add(citationKey);
+      citations.push({
+        toolCallId: toolCall.id,
+        chunkId: chunk.id,
+        documentId: chunk.documentId,
+        documentName: chunk.documentName,
+        chunkIndex: chunk.chunkIndex,
+        score: chunk.score,
+        snippet: toCitationSnippet(chunk.content),
+      });
+    }
+  }
+
+  return citations;
 }
 
 function toAuditMetadata(value: Prisma.InputJsonValue): Prisma.InputJsonValue {
@@ -216,12 +286,28 @@ export class ChatService {
         .then(async () => {
           const assistantText = getAssistantText(stream);
           await this.db.$transaction(async (transaction) => {
+            const assistantCitations = await transaction.toolCall.findMany({
+              where: {
+                agentRunId: agentRun.id,
+                name: 'retrieve_chunks',
+                status: 'COMPLETED',
+              },
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                name: true,
+                result: true,
+              },
+            });
+            const citations = extractAssistantCitations(assistantCitations);
+
             if (assistantText) {
               await transaction.message.create({
                 data: {
                   conversationId: conversation.id,
                   role: MessageRole.ASSISTANT,
                   content: assistantText,
+                  citations: citations.length > 0 ? citations : Prisma.JsonNull,
                   metadata: {
                     activeAgentName: stream.activeAgent?.name ?? selectedAgent.name,
                     requestId: input.requestId,

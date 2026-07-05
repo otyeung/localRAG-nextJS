@@ -138,6 +138,61 @@ describe('chat route', () => {
     });
   });
 
+  it('accepts AI SDK-compatible assistant parts with non-text entries', async () => {
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_chat_parts',
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            id: 'assistant_1',
+            role: 'assistant',
+            parts: [
+              { type: 'reasoning', text: 'Thinking...' },
+              { type: 'tool-retrieve_chunks', state: 'output-available', toolCallId: 'call_1' },
+              { type: 'source-url', url: 'https://example.com/manual' },
+            ],
+          },
+          {
+            id: 'user_1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'What does the manual say?' }],
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(routeMocks.streamChat).toHaveBeenCalledWith({
+      userId: 'user_1',
+      requestId: 'req_chat_parts',
+      ipAddress: 'unknown',
+      userAgent: 'unknown',
+      messages: [
+        {
+          id: 'assistant_1',
+          role: 'assistant',
+          parts: [
+            { type: 'reasoning', text: 'Thinking...' },
+            { type: 'tool-retrieve_chunks', state: 'output-available', toolCallId: 'call_1' },
+            { type: 'source-url', url: 'https://example.com/manual' },
+          ],
+        },
+        {
+          id: 'user_1',
+          role: 'user',
+          parts: [{ type: 'text', text: 'What does the manual say?' }],
+        },
+      ],
+    });
+  });
+
   it('returns structured validation errors for invalid request bodies', async () => {
     const request = new Request('https://app.example.com/api/chat', {
       method: 'POST',
@@ -182,7 +237,7 @@ describe('chat route', () => {
         messages: [
           {
             role: 'assistant',
-            parts: [{ type: 'text', text: '   ' }],
+            parts: [{ type: 42, text: 'not-valid' }],
           },
         ],
       }),

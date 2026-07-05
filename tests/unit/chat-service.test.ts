@@ -44,6 +44,7 @@ describe('ChatService', () => {
   const agentRunCreate = vi.fn();
   const agentRunUpdate = vi.fn();
   const auditLogCreate = vi.fn();
+  const toolCallFindMany = vi.fn();
   const runAgent = vi.fn();
   const streamResponseFactory = vi.fn();
   const db = {
@@ -59,6 +60,10 @@ describe('ChatService', () => {
         },
         agentRun: {
           create: agentRunCreate,
+          update: agentRunUpdate,
+        },
+        toolCall: {
+          findMany: toolCallFindMany,
         },
         auditLog: {
           create: auditLogCreate,
@@ -90,6 +95,7 @@ describe('ChatService', () => {
     agentRunCreate.mockReset();
     agentRunUpdate.mockReset();
     auditLogCreate.mockReset();
+    toolCallFindMany.mockReset();
     runAgent.mockReset();
     streamResponseFactory.mockReset();
     db.$transaction.mockClear();
@@ -108,6 +114,7 @@ describe('ChatService', () => {
     agentRunCreate.mockResolvedValue({
       id: 'agent_run_1',
     });
+    toolCallFindMany.mockResolvedValue([]);
     runAgent.mockResolvedValue({
       completed: new Promise(() => {}),
       finalOutput: '',
@@ -183,5 +190,113 @@ describe('ChatService', () => {
     ]);
     expect(auditMetadata[0]).not.toHaveProperty('content');
     expect(auditMetadata[1]).not.toHaveProperty('assistantText');
+  });
+
+  it('persists safe citations derived from retrieve_chunks tool results', async () => {
+    messageCreate
+      .mockResolvedValueOnce({
+        id: 'message_user_1',
+      })
+      .mockResolvedValueOnce({
+        id: 'message_assistant_1',
+      });
+    toolCallFindMany.mockResolvedValue([
+      {
+        id: 'tool_call_1',
+        name: 'retrieve_chunks',
+        result: {
+          chunks: [
+            {
+              id: 'chunk_1',
+              documentId: 'document_1',
+              documentName: 'Cymbal Starlight Manual',
+              chunkIndex: 7,
+              content: 'Cargo capacity: 4,500 metric tons with balanced load distribution.',
+              score: 0.98,
+              metadata: {
+                internalOnly: 'do-not-persist',
+              },
+            },
+          ],
+          rawPayload: {
+            internal: true,
+          },
+        },
+      },
+    ]);
+    runAgent.mockResolvedValue({
+      completed: Promise.resolve(),
+      finalOutput: 'The Cymbal Starlight can carry 4,500 metric tons.',
+      activeAgent: { name: 'GeneralAssistantAgent' },
+      lastResponseId: 'response_1',
+    });
+
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_citations',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      conversationId: 'conversation_1',
+      messages: [
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'What is the cargo capacity?' }],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(toolCallFindMany).toHaveBeenCalledWith({
+      where: {
+        agentRunId: 'agent_run_1',
+        name: 'retrieve_chunks',
+        status: 'COMPLETED',
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        result: true,
+      },
+    });
+    expect(messageCreate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'conversation_1',
+          role: 'ASSISTANT',
+          content: 'The Cymbal Starlight can carry 4,500 metric tons.',
+          citations: [
+            {
+              toolCallId: 'tool_call_1',
+              chunkId: 'chunk_1',
+              documentId: 'document_1',
+              documentName: 'Cymbal Starlight Manual',
+              chunkIndex: 7,
+              score: 0.98,
+              snippet: 'Cargo capacity: 4,500 metric tons with balanced load distribution.',
+            },
+          ],
+        }),
+      }),
+    );
+    const assistantPayload = messageCreate.mock.calls[1]?.[0]?.data;
+    expect(assistantPayload.citations[0]).not.toHaveProperty('content');
+    expect(assistantPayload.citations[0]).not.toHaveProperty('metadata');
+    expect(assistantPayload.citations[0]).not.toHaveProperty('rawPayload');
   });
 });

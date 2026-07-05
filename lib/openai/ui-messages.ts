@@ -7,45 +7,36 @@ type LegacyContentPart = {
   content?: string;
 };
 
-export type AppUiTextPart = {
-  type: 'text';
-  text: string;
+export type AppUiMessagePart = {
+  type: string;
+  text?: unknown;
+  [key: string]: unknown;
 };
 
 export type AppUiMessage = Pick<UIMessage, 'role'> & {
   id?: string;
-  parts: AppUiTextPart[];
+  parts?: AppUiMessagePart[];
   content?: string;
 };
 
-export const appUiTextPartSchema = z.object({
-  type: z.literal('text'),
-  text: z.string().trim().min(1, 'Message text must be non-empty.'),
-});
+export const appUiMessagePartSchema = z
+  .object({
+    type: z.string(),
+  })
+  .catchall(z.unknown());
 
 export const appUiMessageSchema = z
   .object({
     id: z.string().optional(),
     role: z.enum(['system', 'user', 'assistant']),
-    parts: z.array(appUiTextPartSchema),
-    content: z.string().trim().min(1, 'Legacy message content must be non-empty.').optional(),
-  })
-  .superRefine((message, context) => {
-    if (message.parts.length > 0 || message.content) {
-      return;
-    }
-
-    context.addIssue({
-      code: 'custom',
-      path: ['parts'],
-      message: 'Message must include at least one non-empty text part or legacy content.',
-    });
+    parts: z.array(appUiMessagePartSchema).optional(),
+    content: z.string().optional(),
   });
 
 export type AppUiMessageLike = {
   role: 'system' | 'user' | 'assistant';
   id?: string;
-  parts?: Array<{ type?: string; text?: string }>;
+  parts?: AppUiMessagePart[];
   content?: unknown;
 };
 
@@ -56,7 +47,7 @@ function collectTextFromParts(parts: AppUiMessageLike['parts']): string {
 
   return parts
     .filter((part) => part?.type === 'text' && typeof part.text === 'string')
-    .map((part) => part.text?.trim() ?? '')
+    .map((part) => (typeof part.text === 'string' ? part.text.trim() : ''))
     .filter(Boolean)
     .join('\n');
 }

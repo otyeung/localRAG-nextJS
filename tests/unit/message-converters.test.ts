@@ -72,4 +72,29 @@ describe('toAgentInput', () => {
       },
     ]);
   });
+
+  it('ignores non-text UIMessage parts without rejecting the message payload shape', () => {
+    const messages: UIMessage[] = [
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        parts: [
+          { type: 'reasoning', text: 'Internal chain of thought placeholder.' } as never,
+          { type: 'tool-retrieve_chunks', state: 'output-available' } as never,
+          { type: 'source-url', url: 'https://example.com/doc' } as never,
+          { type: 'text', text: 'Grounded answer.' },
+        ],
+      },
+    ];
+
+    const input = toAgentInput(messages);
+
+    expect(input).toEqual([
+      {
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: 'Grounded answer.' }],
+      },
+    ]);
+  });
 });
