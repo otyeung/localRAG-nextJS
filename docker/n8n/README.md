@@ -12,7 +12,7 @@ They are exported as active workflows so a fresh `docker compose up` registers t
 
 - `nextjs` writes uploaded files to `/data/uploads`.
 - `n8n` mounts the same shared `app_data` volume at `/data` and reads the absolute `filePath` passed by the app.
-- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_VECTOR_SIZE`, `QDRANT_DISTANCE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`, `N8N_WEBHOOK_SECRET`, and `N8N_EDITOR_BASE_URL` are provided through container environment variables.
+- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_VECTOR_SIZE`, `QDRANT_DISTANCE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`, and `N8N_WEBHOOK_SECRET` are provided through container environment variables.
 - `qdrant-init` verifies or creates the configured collection before `n8n` and `nextjs` start.
 - `n8n` and `qdrant` stay internal to the Docker network by default; only `nextjs` is published to the host.
 - Next.js talks to n8n over the internal Docker network at `http://n8n:5678`; workflow URLs stay server-side and each webhook request must include the internal `x-n8n-webhook-secret` header.
@@ -22,16 +22,10 @@ They are exported as active workflows so a fresh `docker compose up` registers t
 
 The OpenAI embedding request nodes set the `Authorization` header from `OPENAI_API_KEY` at runtime inside the n8n container. Fresh imports work without creating any n8n credential records first, and workflow re-imports cannot break a manual credential relink because there is no credential dependency to preserve.
 
-Because the header is resolved server-side from container environment variables, the secret never needs to be exposed to the browser.
+Because the header is resolved server-side from container environment variables, the secret stays inside server-side/container-side traffic.
 
 ## Required operator bootstrap
 
-1. Start the stack with the localhost-only editor override: `docker compose -f docker-compose.yml -f docker-compose.n8n-editor.yml up -d`.
-2. Open n8n and generate an API key from **Settings → n8n API**.
-3. Export that value as `N8N_API_KEY` in your Compose environment and restart `nextjs` (or recreate the container).
+`docker compose up` does not require `N8N_API_KEY` for Next.js to start or for internal webhook execution to work.
 
-Without an operator-created `N8N_API_KEY`, the app can still invoke internal webhook endpoints with `N8N_WEBHOOK_SECRET`, but n8n REST execution/status calls return a configuration error and health remains degraded.
-
-## Host access
-
-`docker compose up` does not publish `n8n` or `qdrant` ports by default. When you need the n8n editor on the host, layer in `docker-compose.n8n-editor.yml`, which binds `127.0.0.1:5678:5678` and keeps `N8N_EDITOR_BASE_URL=http://localhost:5678` for the browser-facing bootstrap flow. Internal Next.js webhook and REST calls still use `http://n8n:5678` on the Docker network.
+If an operator provisions an n8n REST API key outside the app request path, export that value as `N8N_API_KEY` in the Compose environment and restart `nextjs` (or recreate the container). Until then, the app can still invoke internal webhook endpoints with `N8N_WEBHOOK_SECRET`, but n8n REST execution/status calls return a configuration error and health remains degraded.

@@ -1,6 +1,0 @@
-services:
-  n8n:
-    environment:
-      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5678}
-    ports:
-      - '127.0.0.1:5678:5678'
