@@ -31,6 +31,7 @@ vi.mock('@/lib/repositories/user-repository', () => ({
 import {
   createAnonymousCookieValue,
   createAnonymousFingerprintHash,
+  createAnonymousRequestFingerprint,
   verifyAnonymousCookieValue,
 } from '@/lib/auth/anonymous-provider';
 import { getCurrentUser } from '@/lib/auth/current-user';
@@ -172,5 +173,36 @@ describe('anonymous auth provider', () => {
 
     expect(verifyAnonymousCookieValue(createAnonymousCookieValue(fingerprint))).toBe(fingerprint);
     expect(verifyAnonymousCookieValue(`${fingerprint}.invalidsignature`)).toBeUndefined();
+  });
+
+  it('creates different fallback fingerprints for different ordinary header sets', () => {
+    const first = createAnonymousRequestFingerprint({
+      method: 'GET',
+      userAgent: 'browser-a',
+      acceptLanguage: 'en-US',
+      secChUa: '"Chromium";v="126"',
+      secChUaPlatform: '"macOS"',
+    });
+    const second = createAnonymousRequestFingerprint({
+      method: 'GET',
+      userAgent: 'browser-b',
+      acceptLanguage: 'en-GB',
+      secChUa: '"Chromium";v="126"',
+      secChUaPlatform: '"Windows"',
+    });
+
+    expect(first).not.toBe(second);
+  });
+
+  it('creates a stable fallback fingerprint for the same ordinary header set', () => {
+    const input = {
+      method: 'PATCH',
+      userAgent: 'browser-a',
+      acceptLanguage: 'en-US',
+      secChUa: '"Chromium";v="126"',
+      secChUaPlatform: '"macOS"',
+    };
+
+    expect(createAnonymousRequestFingerprint(input)).toBe(createAnonymousRequestFingerprint(input));
   });
 });

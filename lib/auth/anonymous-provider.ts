@@ -9,6 +9,14 @@ const ANONYMOUS_FINGERPRINT_LENGTH = 32;
 const ANONYMOUS_FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 const ANONYMOUS_SIGNATURE_PATTERN = /^[a-f0-9]{64}$/;
 
+export type AnonymousRequestFingerprintInput = {
+  method: string;
+  userAgent: string;
+  acceptLanguage: string;
+  secChUa: string;
+  secChUaPlatform: string;
+};
+
 export async function createAnonymousFingerprintHash(fingerprint: string): Promise<string> {
   return createHash('sha256').update(`localrag-nextjs:${fingerprint}`).digest('hex');
 }
@@ -23,6 +31,21 @@ export function isAnonymousFingerprint(value: string | undefined): value is stri
 
 function createAnonymousCookieSignature(fingerprint: string): string {
   return createHmac('sha256', env.auth.anonymousCookieSecret).update(fingerprint).digest('hex');
+}
+
+export function createAnonymousRequestFingerprint(input: AnonymousRequestFingerprintInput): string {
+  return createHmac('sha256', env.auth.anonymousCookieSecret)
+    .update(
+      [
+        'anonymous-request-fingerprint',
+        input.method.toUpperCase(),
+        input.userAgent,
+        input.acceptLanguage,
+        input.secChUa,
+        input.secChUaPlatform,
+      ].join('\n'),
+    )
+    .digest('hex');
 }
 
 export function createAnonymousCookieValue(fingerprint: string): string {

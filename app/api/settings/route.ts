@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { getVerifiedAnonymousFingerprint } from '@/lib/auth/anonymous-provider';
+import { createAnonymousRequestFingerprint, getVerifiedAnonymousFingerprint } from '@/lib/auth/anonymous-provider';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
@@ -10,6 +10,16 @@ import { rateLimit } from '@/lib/security/rate-limit';
 import { SettingsService } from '@/lib/services/settings-service';
 
 const settingsService = new SettingsService();
+const PRE_PROVISION_RATE_LIMIT = 30;
+const PRE_PROVISION_RATE_WINDOW_MS = 60_000;
+/**
+ * Global guardrail for requests without a valid anonymous cookie.
+ * Keep this comfortably above the per-fingerprint/IP 30/min bucket so ordinary
+ * first-time clients do not block one another, while still capping anonymous
+ * user creation and rate-limit bucket growth during bursts.
+ */
+const PRE_PROVISION_NEW_ANONYMOUS_GLOBAL_LIMIT = 300;
+const PRE_PROVISION_NEW_ANONYMOUS_GLOBAL_KEY = 'settings:pre:new-anonymous:global';
 
 const settingsPatchSchema = z
   .object({
@@ -24,8 +34,8 @@ const settingsPatchSchema = z
 async function enforceRateLimit(key: string): Promise<void> {
   const result = await rateLimit(key, {
     namespace: 'settings-api',
-    limit: 30,
-    windowMs: 60_000,
+    limit: PRE_PROVISION_RATE_LIMIT,
+    windowMs: PRE_PROVISION_RATE_WINDOW_MS,
   });
 
   if (!result.allowed) {
@@ -46,7 +56,13 @@ function buildPreProvisionRateLimitKey(request: Request, requestContext: Request
     return `settings:pre:${method}:ip:${requestContext.ipAddress}`;
   }
 
-  return `settings:pre:${method}:anonymous`;
+  return `settings:pre:${method}:fingerprint:${createAnonymousRequestFingerprint({
+    method,
+    userAgent: request.headers.get('user-agent') ?? '',
+    acceptLanguage: request.headers.get('accept-language') ?? '',
+    secChUa: request.headers.get('sec-ch-ua') ?? '',
+    secChUaPlatform: request.headers.get('sec-ch-ua-platform') ?? '',
+  })}`;
 }
 
 async function enforcePreProvisionRateLimit(
@@ -54,16 +70,31 @@ async function enforcePreProvisionRateLimit(
   requestContext: RequestContext,
   method: 'get' | 'patch',
 ): Promise<void> {
+  const anonymousFingerprint = getVerifiedAnonymousFingerprint(request);
   const result = await rateLimit(buildPreProvisionRateLimitKey(request, requestContext, method), {
     namespace: 'settings-api-pre-auth',
-    limit: 30,
-    windowMs: 60_000,
+    limit: PRE_PROVISION_RATE_LIMIT,
+    windowMs: PRE_PROVISION_RATE_WINDOW_MS,
   });
 
   if (!result.allowed) {
     throw new AppError('RATE_LIMITED', 'Too many settings requests.', {
       resetAt: result.resetAt.toISOString(),
     });
+  }
+
+  if (!anonymousFingerprint) {
+    const newAnonymousResult = await rateLimit(PRE_PROVISION_NEW_ANONYMOUS_GLOBAL_KEY, {
+      namespace: 'settings-api-pre-auth-new-anonymous',
+      limit: PRE_PROVISION_NEW_ANONYMOUS_GLOBAL_LIMIT,
+      windowMs: PRE_PROVISION_RATE_WINDOW_MS,
+    });
+
+    if (!newAnonymousResult.allowed) {
+      throw new AppError('RATE_LIMITED', 'Too many settings requests.', {
+        resetAt: newAnonymousResult.resetAt.toISOString(),
+      });
+    }
   }
 }
 

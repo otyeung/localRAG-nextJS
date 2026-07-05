@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
-import { createAnonymousCookieValue } from '@/lib/auth/anonymous-provider';
+import { createAnonymousCookieValue, createAnonymousRequestFingerprint } from '@/lib/auth/anonymous-provider';
 
 const originalTrustProxyHeaders = process.env.TRUST_PROXY_HEADERS;
 const mutableProcessEnv = process.env as NodeJS.ProcessEnv & { TRUST_PROXY_HEADERS?: string };
@@ -85,13 +85,26 @@ describe('settings route', () => {
     expect(routeMocks.getForUser).toHaveBeenCalledWith('user_1');
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:anonymous',
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'vitest',
+        acceptLanguage: '',
+        secChUa: '',
+        secChUaPlatform: '',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
     );
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      3,
       'settings:get:user_1:unknown',
       expect.objectContaining({
         namespace: 'settings-api',
@@ -139,13 +152,26 @@ describe('settings route', () => {
     );
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:patch:anonymous',
+      `settings:pre:patch:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'PATCH',
+        userAgent: 'vitest',
+        acceptLanguage: '',
+        secChUa: '',
+        secChUaPlatform: '',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
     );
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      3,
       'settings:patch:user_1:unknown',
       expect.objectContaining({
         namespace: 'settings-api',
@@ -202,40 +228,90 @@ describe('settings route', () => {
       },
     });
     expect(routeMocks.rateLimit).toHaveBeenCalledWith(
-      'settings:pre:get:anonymous',
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: '',
+        acceptLanguage: '',
+        secChUa: '',
+        secChUaPlatform: '',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
     );
   });
 
-  it('pre-provision rate limits repeated cookie-less settings writes before creating a user', async () => {
-    routeMocks.rateLimit.mockResolvedValueOnce({
-      allowed: false,
-      remaining: 0,
-      resetAt: new Date('2026-01-01T00:00:00.000Z'),
+  it('pre-provision rate limits repeated requests with the same fallback fingerprint before creating a user', async () => {
+    const seenKeys = new Map<string, number>();
+    routeMocks.rateLimit.mockImplementation(async (key: string) => {
+      const count = (seenKeys.get(key) ?? 0) + 1;
+      seenKeys.set(key, count);
+
+      return {
+        allowed: count < 2,
+        remaining: Math.max(1 - count, 0),
+        resetAt: new Date('2026-01-01T00:00:00.000Z'),
+      };
     });
 
-    const request = new Request('https://app.example.com/api/settings', {
+    const firstRequest = new Request('https://app.example.com/api/settings', {
       method: 'PATCH',
       headers: {
         'content-type': 'application/json',
+        'accept-language': 'en-US',
         host: 'app.example.com',
         origin: 'https://app.example.com',
-        'user-agent': 'vitest',
-        'x-request-id': 'req_pre_auth_limited',
+        'sec-ch-ua': '"Chromium";v="126"',
+        'sec-ch-ua-platform': '"macOS"',
+        'user-agent': 'browser-a',
+        'x-request-id': 'req_pre_auth_first',
+      },
+      body: JSON.stringify({ theme: 'dark' }),
+    });
+    const secondRequest = new Request('https://app.example.com/api/settings', {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        'accept-language': 'en-US',
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'sec-ch-ua': '"Chromium";v="126"',
+        'sec-ch-ua-platform': '"macOS"',
+        'user-agent': 'browser-a',
+        'x-request-id': 'req_pre_auth_second',
       },
       body: JSON.stringify({ theme: 'dark' }),
     });
 
-    const response = await PATCH(request);
+    const firstResponse = await PATCH(firstRequest);
+    const secondResponse = await PATCH(secondRequest);
 
-    expect(response.status).toBe(429);
-    expect(routeMocks.getCurrentUser).not.toHaveBeenCalled();
-    expect(routeMocks.updateForUserWithAudit).not.toHaveBeenCalled();
-    expect(routeMocks.rateLimit).toHaveBeenCalledTimes(1);
-    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
-      'settings:pre:patch:anonymous',
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(429);
+    expect(routeMocks.getCurrentUser).toHaveBeenCalledTimes(1);
+    expect(routeMocks.updateForUserWithAudit).toHaveBeenCalledTimes(1);
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      `settings:pre:patch:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'PATCH',
+        userAgent: 'browser-a',
+        acceptLanguage: 'en-US',
+        secChUa: '"Chromium";v="126"',
+        secChUaPlatform: '"macOS"',
+      })}`,
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      4,
+      `settings:pre:patch:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'PATCH',
+        userAgent: 'browser-a',
+        acceptLanguage: 'en-US',
+        secChUa: '"Chromium";v="126"',
+        secChUaPlatform: '"macOS"',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
@@ -262,6 +338,7 @@ describe('settings route', () => {
         namespace: 'settings-api-pre-auth',
       }),
     );
+    expect(routeMocks.rateLimit).toHaveBeenCalledTimes(2);
   });
 
   it('does not trust a forged unsigned 32-character cookie for the pre-provision rate-limit key', async () => {
@@ -278,9 +355,22 @@ describe('settings route', () => {
     expect(response.status).toBe(200);
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:anonymous',
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'vitest',
+        acceptLanguage: '',
+        secChUa: '',
+        secChUaPlatform: '',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
       }),
     );
   });
@@ -299,22 +389,41 @@ describe('settings route', () => {
     expect(response.status).toBe(200);
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:anonymous',
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'vitest',
+        acceptLanguage: '',
+        secChUa: '',
+        secChUaPlatform: '',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
     );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
+      }),
+    );
   });
 
-  it('uses the same shared pre-provision bucket for different user agents without a valid cookie', async () => {
+  it('uses different fallback fingerprint buckets for different ordinary header sets without a valid cookie', async () => {
     const firstRequest = new Request('https://app.example.com/api/settings', {
       headers: {
+        'accept-language': 'en-US',
+        'sec-ch-ua': '"Chromium";v="126"',
+        'sec-ch-ua-platform': '"macOS"',
         'x-request-id': 'req_browser_a',
         'user-agent': 'browser-a',
       },
     });
     const secondRequest = new Request('https://app.example.com/api/settings', {
       headers: {
+        'accept-language': 'en-GB',
+        'sec-ch-ua': '"Chromium";v="126"',
+        'sec-ch-ua-platform': '"Windows"',
         'x-request-id': 'req_browser_b',
         'user-agent': 'browser-b',
       },
@@ -327,16 +436,42 @@ describe('settings route', () => {
     expect(secondResponse.status).toBe(200);
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
       1,
-      'settings:pre:get:anonymous',
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'browser-a',
+        acceptLanguage: 'en-US',
+        secChUa: '"Chromium";v="126"',
+        secChUaPlatform: '"macOS"',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
       }),
     );
     expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
-      3,
-      'settings:pre:get:anonymous',
+      4,
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'browser-b',
+        acceptLanguage: 'en-GB',
+        secChUa: '"Chromium";v="126"',
+        secChUaPlatform: '"Windows"',
+      })}`,
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      5,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
       }),
     );
   });
@@ -360,6 +495,56 @@ describe('settings route', () => {
       'settings:pre:get:ip:203.0.113.10',
       expect.objectContaining({
         namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
+      }),
+    );
+  });
+
+  it('can hit the higher-cap global new-anonymous safety bucket without sharing one tiny low bucket', async () => {
+    routeMocks.rateLimit.mockImplementation(async (_key: string, policy: { namespace?: string }) => ({
+      allowed: policy.namespace !== 'settings-api-pre-auth-new-anonymous',
+      remaining: 0,
+      resetAt: new Date('2026-01-01T00:00:00.000Z'),
+    }));
+
+    const request = new Request('https://app.example.com/api/settings', {
+      headers: {
+        'accept-language': 'en-US',
+        'sec-ch-ua': '"Chromium";v="126"',
+        'sec-ch-ua-platform': '"macOS"',
+        'user-agent': 'browser-a',
+        'x-request-id': 'req_global_safety_limited',
+      },
+    });
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(429);
+    expect(routeMocks.getCurrentUser).not.toHaveBeenCalled();
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      `settings:pre:get:fingerprint:${createAnonymousRequestFingerprint({
+        method: 'GET',
+        userAgent: 'browser-a',
+        acceptLanguage: 'en-US',
+        secChUa: '"Chromium";v="126"',
+        secChUaPlatform: '"macOS"',
+      })}`,
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
+      'settings:pre:new-anonymous:global',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth-new-anonymous',
       }),
     );
   });
