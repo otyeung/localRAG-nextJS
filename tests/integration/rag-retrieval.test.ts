@@ -23,13 +23,41 @@ async function canReach(url: string | undefined) {
   }
 }
 
+async function canQueryDatabase(connectionString: string | undefined) {
+  if (!connectionString) {
+    return false;
+  }
+
+  try {
+    const { prisma } = await import('@/lib/db/prisma');
+    await prisma.$queryRawUnsafe('SELECT 1');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasLiveOpenAiKey() {
+  return (
+    typeof process.env.OPENAI_API_KEY === 'string' &&
+    process.env.OPENAI_API_KEY.trim().length > 0 &&
+    process.env.OPENAI_API_KEY !== 'sk-test'
+  );
+}
+
 describeLive('N8nRetrievalService live corpus validation', () => {
   it('returns grounded chunks for each seeded corpus question', async () => {
-    const n8nReady = await canReach(process.env.N8N_BASE_URL ? `${process.env.N8N_BASE_URL.replace(/\/$/, '')}/healthz` : undefined);
-    const qdrantReady = await canReach(process.env.QDRANT_URL ? `${process.env.QDRANT_URL.replace(/\/$/, '')}/collections` : undefined);
+    const [n8nReady, qdrantReady, databaseReady] = await Promise.all([
+      canReach(process.env.N8N_BASE_URL ? `${process.env.N8N_BASE_URL.replace(/\/$/, '')}/healthz` : undefined),
+      canReach(process.env.QDRANT_URL ? `${process.env.QDRANT_URL.replace(/\/$/, '')}/collections` : undefined),
+      canQueryDatabase(process.env.DATABASE_URL),
+    ]);
+    const openAiReady = hasLiveOpenAiKey();
 
-    if (!n8nReady || !qdrantReady) {
-      console.warn('[rag-retrieval.test] skipping live corpus retrieval because n8n or Qdrant is unavailable.');
+    if (!n8nReady || !qdrantReady || !databaseReady || !openAiReady) {
+      console.warn(
+        '[rag-retrieval.test] skipping live corpus retrieval because database, n8n, qdrant, or openai is unavailable.',
+      );
       return;
     }
 

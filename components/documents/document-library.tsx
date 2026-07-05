@@ -200,6 +200,7 @@ export function DocumentLibrary({
               return (
                 <article
                   key={document.id}
+                  aria-label={`Document ${document.originalFilename}`}
                   className="rounded-[1.75rem] border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-5 shadow-[var(--shadow-panel)]"
                 >
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">

@@ -273,6 +273,7 @@ export function ChatView({
             <button
               type="button"
               disabled={!canRetryLatest}
+              data-testid="retry-latest-response"
               className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-sm text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void retryLatest()}
             >

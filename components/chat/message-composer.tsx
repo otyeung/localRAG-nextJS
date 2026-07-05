@@ -45,6 +45,7 @@ export function MessageComposer({
             type="button"
             onClick={onStop}
             disabled={!isStreaming}
+            data-testid="stop-generation"
             className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-sm text-[color:var(--text-muted)] transition enabled:hover:border-[color:var(--border-strong)] enabled:hover:text-[color:var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Square className="h-3.5 w-3.5" />
