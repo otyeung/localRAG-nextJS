@@ -52,6 +52,24 @@
       }
     },
     {
+      "id": "delete-existing-qdrant-points",
+      "name": "Delete Existing Qdrant Points",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        440
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points/delete?wait=true` }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"filter\":{\"must\":[{\"key\":\"documentId\",\"match\":{\"value\": $json.documentId}}]}}",
+        "options": {}
+      }
+    },
+    {
       "id": "read-file",
       "name": "Read PDF From Shared Volume",
       "type": "n8n-nodes-base.readWriteFile",
@@ -164,7 +182,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const executionId = String($execution.id ?? '').trim();\nif (!executionId) {\n  throw new Error('execution id unavailable for ingestion response');\n}\nconst workflowId = $workflow.id == null ? null : String($workflow.id);\nreturn [{ json: {\n  executionId,\n  workflowId,\n  status: 'success',\n  message: 'Document ingestion completed.',\n} }];"
+        "jsCode": "const executionId = String($execution.id ?? '').trim();\nif (!executionId) {\n  throw new Error('execution id unavailable for ingestion response');\n}\nconst workflowId = $workflow.id == null ? null : String($workflow.id);\nreturn [{ json: {\n  executionId,\n  workflowId,\n  status: 'running',\n  message: 'Document ingestion started.',\n} }];"
       }
     },
     {
@@ -198,7 +216,12 @@
       "main": [
         [
           {
-            "node": "Read PDF From Shared Volume",
+            "node": "Summarize Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delete Existing Qdrant Points",
             "type": "main",
             "index": 0
           }
@@ -262,13 +285,7 @@
     },
     "Upsert Into Qdrant": {
       "main": [
-        [
-          {
-            "node": "Summarize Result",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     },
     "Summarize Result": {
@@ -287,6 +304,17 @@
         [
           {
             "node": "Normalize Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Existing Qdrant Points": {
+      "main": [
+        [
+          {
+            "node": "Read PDF From Shared Volume",
             "type": "main",
             "index": 0
           }

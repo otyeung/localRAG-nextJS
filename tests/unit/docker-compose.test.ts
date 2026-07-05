@@ -7,15 +7,25 @@ type WorkflowNode = {
   parameters?: Record<string, unknown>;
 };
 
+type WorkflowConnection = {
+  node: string;
+  type: string;
+  index: number;
+};
+
+type WorkflowConnections = Record<string, { main?: WorkflowConnection[][] }>;
+
 describe('docker compose', () => {
   const compose = readFileSync('docker-compose.yml', 'utf8');
   const ingestionWorkflow = JSON.parse(readFileSync('docker/n8n/workflows/ingestion.json', 'utf8')) as {
     active: boolean;
     nodes: WorkflowNode[];
+    connections: WorkflowConnections;
   };
   const retrievalWorkflow = JSON.parse(readFileSync('docker/n8n/workflows/retrieval.json', 'utf8')) as {
     active: boolean;
     nodes: WorkflowNode[];
+    connections: WorkflowConnections;
   };
 
   const getNode = (workflow: { nodes: WorkflowNode[] }, name: string) => {
@@ -49,6 +59,11 @@ describe('docker compose', () => {
     expect(compose).toContain('N8N_WEBHOOK_SECRET');
   });
 
+  it('requires an operator-created n8n api key instead of shipping a fake compose default', () => {
+    expect(compose).toContain('- N8N_API_KEY=${N8N_API_KEY}');
+    expect(compose).not.toContain('dev-n8n-api-key');
+  });
+
   it('marks imported n8n workflows as active for production webhook registration', () => {
     expect(ingestionWorkflow.active).toBe(true);
     expect(retrievalWorkflow.active).toBe(true);
@@ -72,17 +87,35 @@ describe('docker compose', () => {
     expect(embedBody).toContain('OPENAI_EMBEDDING_MODEL');
   });
 
-  it('returns an app-compatible ingestion start result contract from the webhook response', () => {
+  it('returns an app-compatible async ingestion start result contract from the webhook response', () => {
     const summarizeNode = getNode(ingestionWorkflow, 'Summarize Result');
     const summarizeCode = String(summarizeNode.parameters?.jsCode ?? '');
+    const normalizeRequestConnections = ingestionWorkflow.connections['Normalize Request']?.main ?? [];
+    const branchTargets = normalizeRequestConnections.flat().map((connection) => connection.node);
 
     expect(summarizeCode).toContain('executionId');
     expect(summarizeCode).toContain('$execution.id');
     expect(summarizeCode).toContain('workflowId');
-    expect(summarizeCode).toContain('status');
+    expect(summarizeCode).toContain("status: 'running'");
     expect(summarizeCode).toContain('message');
     expect(summarizeCode).not.toContain('chunkCount');
     expect(summarizeCode).not.toContain('contentPreview');
+    expect(branchTargets).toContain('Summarize Result');
+    expect(branchTargets).toContain('Delete Existing Qdrant Points');
+  });
+
+  it('deletes stale qdrant points for a document before upserting replacement chunks', () => {
+    const deleteNode = getNode(ingestionWorkflow, 'Delete Existing Qdrant Points');
+    const deleteBody = String(deleteNode.parameters?.jsonBody ?? '');
+    const deleteUrl = String(deleteNode.parameters?.url ?? '');
+    const deleteConnections = ingestionWorkflow.connections['Delete Existing Qdrant Points']?.main ?? [];
+    const deleteTargets = deleteConnections.flat().map((connection) => connection.node);
+
+    expect(deleteUrl).toContain('/points/delete?wait=true');
+    expect(deleteBody).toContain('"filter"');
+    expect(deleteBody).toContain('"documentId"');
+    expect(deleteBody).toContain('"value": $json.documentId');
+    expect(deleteTargets).toContain('Read PDF From Shared Volume');
   });
 
   it('preserves retrieval metadata after embedding when building the Qdrant search request', () => {

@@ -140,7 +140,7 @@ services:
       - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app_password}@postgres:5432/${POSTGRES_DB:-localrag_nextjs}?schema=public
       - N8N_BASE_URL=http://n8n:5678
-      - N8N_API_KEY=${N8N_API_KEY:-dev-n8n-api-key}
+      - N8N_API_KEY=${N8N_API_KEY}
       - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-change-me-n8n-webhook-secret}
       - N8N_TIMEOUT=${N8N_TIMEOUT:-30000}
       - N8N_RETRY_COUNT=${N8N_RETRY_COUNT:-3}
