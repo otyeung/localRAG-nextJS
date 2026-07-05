@@ -1,0 +1,149 @@
+'use client';
+
+import type { UIMessage } from 'ai';
+import { Copy, RefreshCw } from 'lucide-react';
+
+import { StatusBadge } from '@/components/common/status-badge';
+import { MarkdownMessage } from '@/components/chat/markdown-message';
+
+type ChatMessage = UIMessage<{
+  model?: string;
+  agent?: string;
+  activeAgentName?: string;
+  createdAt?: string;
+}>;
+
+function getTextContent(message: ChatMessage): string {
+  return message.parts
+    .filter((part): part is Extract<ChatMessage['parts'][number], { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n\n');
+}
+
+function getReasoningParts(message: ChatMessage) {
+  return message.parts.filter(
+    (part): part is Extract<ChatMessage['parts'][number], { type: 'reasoning' }> => part.type === 'reasoning',
+  );
+}
+
+function getSourceParts(message: ChatMessage) {
+  return message.parts.filter(
+    (part): part is Extract<ChatMessage['parts'][number], { type: 'source-url' | 'source-document' }> =>
+      part.type === 'source-url' || part.type === 'source-document',
+  );
+}
+
+export function MessageList({
+  messages,
+  onCopy,
+  onRetry,
+}: {
+  messages: ChatMessage[];
+  onCopy: (message: ChatMessage) => void;
+  onRetry: (message: ChatMessage) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {messages.map((message) => {
+        const content = getTextContent(message);
+        const reasoningParts = getReasoningParts(message);
+        const sources = getSourceParts(message);
+        const isAssistant = message.role === 'assistant';
+        const timestamp = message.metadata?.createdAt
+          ? new Date(message.metadata.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : 'Live';
+
+        return (
+          <article
+            key={message.id}
+            className={[
+              'rounded-[1.75rem] border p-5 shadow-[var(--shadow-panel)]',
+              isAssistant
+                ? 'border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)]'
+                : 'border-[color:var(--accent-soft)] bg-[color:var(--accent-surface)]',
+            ].join(' ')}
+          >
+            <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge label={message.role} tone={isAssistant ? 'info' : 'neutral'} />
+                  {isAssistant && (message.metadata?.activeAgentName ?? message.metadata?.agent) ? (
+                    <StatusBadge label={message.metadata?.activeAgentName ?? message.metadata?.agent ?? 'Assistant'} tone="success" />
+                  ) : null}
+                  {isAssistant && message.metadata?.model ? (
+                    <StatusBadge label={message.metadata.model} tone="neutral" />
+                  ) : null}
+                </div>
+                <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-dim)]">{timestamp}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-xs font-medium text-[color:var(--text-muted)] transition hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-strong)]"
+                  aria-label="Copy message"
+                  onClick={() => onCopy(message)}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy message
+                </button>
+                {isAssistant ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] px-3 py-2 text-xs font-medium text-[color:var(--text-muted)] transition hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-strong)]"
+                    onClick={() => onRetry(message)}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retry response
+                  </button>
+                ) : null}
+              </div>
+            </header>
+
+            {content ? <MarkdownMessage content={content} /> : null}
+
+            {sources.length > 0 ? (
+              <section className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
+                <p className="mb-3 text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-dim)]">
+                  Citations
+                </p>
+                <div className="space-y-2">
+                  {sources.map((source) => (
+                    <div
+                      key={source.sourceId}
+                      className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
+                    >
+                      <p className="text-sm font-medium text-[color:var(--text-strong)]">
+                        {'title' in source && source.title ? source.title : source.sourceId}
+                      </p>
+                      {'url' in source ? (
+                        <a
+                          href={source.url}
+                          className="mt-1 inline-block text-sm text-[color:var(--accent)] underline underline-offset-4"
+                        >
+                          {source.url}
+                        </a>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {reasoningParts.length > 0 ? (
+              <details className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
+                <summary className="cursor-pointer text-sm font-medium text-[color:var(--text-strong)]">
+                  Reasoning metadata
+                </summary>
+                <div className="mt-3 space-y-3 text-sm text-[color:var(--text-muted)]">
+                  {reasoningParts.map((part, index) => (
+                    <p key={`${message.id}-reasoning-${index}`}>{part.text}</p>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
