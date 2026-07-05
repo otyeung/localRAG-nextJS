@@ -101,6 +101,7 @@ export function MessageList({
         return (
           <article
             key={message.id}
+            data-testid={isAssistant ? 'assistant-message' : 'user-message'}
             className={[
               'rounded-[1.75rem] border p-5 shadow-[var(--shadow-panel)]',
               isAssistant
@@ -144,7 +145,11 @@ export function MessageList({
               </div>
             </header>
 
-            {content ? <MarkdownMessage content={content} /> : null}
+            {content ? (
+              <div data-testid="message-content">
+                <MarkdownMessage content={content} />
+              </div>
+            ) : null}
 
             {toolParts.length > 0 ? (
               <section className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
@@ -185,7 +190,10 @@ export function MessageList({
             ) : null}
 
             {sources.length > 0 ? (
-              <section className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4">
+              <section
+                data-testid="message-citations"
+                className="mt-5 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-subtle)] p-4"
+              >
                 <p className="mb-3 text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-dim)]">
                   Citations
                 </p>
@@ -193,6 +201,7 @@ export function MessageList({
                   {sources.map((source) => (
                     <div
                       key={source.sourceId}
+                      data-testid="citation-item"
                       className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
                     >
                        <p className="text-sm font-medium text-[color:var(--text-strong)]">

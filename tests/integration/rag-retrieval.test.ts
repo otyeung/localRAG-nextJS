@@ -3,9 +3,9 @@ import { describe, expect, it, test, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import { corpusQuestions } from '@/tests/fixtures/corpus-questions';
+import { summarizeLiveCorpusPreflight } from '@/tests/integration/support/live-corpus-preflight';
 
 const liveCorpusEnabled = process.env.LOCALRAG_LIVE_CORPUS_TESTS === '1';
-const describeLive = liveCorpusEnabled ? describe : describe.skip;
 
 async function canReach(url: string | undefined) {
   if (!url) {
@@ -45,22 +45,31 @@ function hasLiveOpenAiKey() {
   );
 }
 
+const liveCorpusDependencyReadiness = liveCorpusEnabled
+  ? await (async () => {
+      const [n8nReady, qdrantReady, databaseReady] = await Promise.all([
+        canReach(process.env.N8N_BASE_URL ? `${process.env.N8N_BASE_URL.replace(/\/$/, '')}/healthz` : undefined),
+        canReach(process.env.QDRANT_URL ? `${process.env.QDRANT_URL.replace(/\/$/, '')}/collections` : undefined),
+        canQueryDatabase(process.env.DATABASE_URL),
+      ]);
+
+      return {
+        n8nReady,
+        qdrantReady,
+        databaseReady,
+        openAiReady: hasLiveOpenAiKey(),
+      };
+    })()
+  : undefined;
+
+const liveCorpusPreflight = summarizeLiveCorpusPreflight({
+  liveCorpusEnabled,
+  dependencyReadiness: liveCorpusDependencyReadiness,
+});
+const describeLive = liveCorpusPreflight.shouldRun ? describe : describe.skip;
+
 describeLive('N8nRetrievalService live corpus validation', () => {
   it('returns grounded chunks for each seeded corpus question', async () => {
-    const [n8nReady, qdrantReady, databaseReady] = await Promise.all([
-      canReach(process.env.N8N_BASE_URL ? `${process.env.N8N_BASE_URL.replace(/\/$/, '')}/healthz` : undefined),
-      canReach(process.env.QDRANT_URL ? `${process.env.QDRANT_URL.replace(/\/$/, '')}/collections` : undefined),
-      canQueryDatabase(process.env.DATABASE_URL),
-    ]);
-    const openAiReady = hasLiveOpenAiKey();
-
-    if (!n8nReady || !qdrantReady || !databaseReady || !openAiReady) {
-      console.warn(
-        '[rag-retrieval.test] skipping live corpus retrieval because database, n8n, qdrant, or openai is unavailable.',
-      );
-      return;
-    }
-
     const [{ N8nRetrievalService }, { seedCorpus }] = await Promise.all([
       import('@/lib/n8n/retrieval'),
       import('@/scripts/seed-corpus'),

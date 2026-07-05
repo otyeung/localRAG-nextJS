@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 import { corpusQuestions } from '@/tests/fixtures/corpus-questions';
 
@@ -21,6 +21,17 @@ type PersistedMessage = {
   updatedAt: string;
 };
 
+type PersistedConversation = {
+  id: string;
+  title: string;
+  status: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  lastMessagePreview: string | null;
+  activeAgentName: string | null;
+};
+
 function json(route: Route, data: unknown, status = 200) {
   return route.fulfill({
     status,
@@ -33,7 +44,45 @@ function toSseBody(chunks: unknown[]) {
   return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
 }
 
-async function mockShellApis(page: Page, getMessages: () => PersistedMessage[]) {
+type AssistantMessageSnapshot = {
+  responseText: string;
+  responseFragment: string;
+  citationText: string;
+};
+
+async function captureAssistantMessageSnapshot(message: Locator): Promise<AssistantMessageSnapshot> {
+  const responseText = (await message.getByTestId('message-content').innerText()).trim();
+  const responseFragment = responseText.split(/\s+/).slice(0, 12).join(' ');
+  const citationText = (await message.getByTestId('citation-item').first().innerText()).trim();
+
+  return {
+    responseText,
+    responseFragment,
+    citationText,
+  };
+}
+
+async function expectPersistedAssistantMessage(
+  page: Page,
+  snapshot: AssistantMessageSnapshot,
+  requiredFragment: string,
+  citationText: string,
+) {
+  const assistantMessage = page.getByTestId('assistant-message').filter({
+    has: page.getByTestId('message-content').filter({ hasText: snapshot.responseFragment }),
+  }).last();
+
+  await expect(assistantMessage).toBeVisible({ timeout: 120_000 });
+  await expect(assistantMessage.getByTestId('message-content')).toContainText(requiredFragment, { timeout: 120_000 });
+  await expect(assistantMessage.getByTestId('message-content')).toContainText(snapshot.responseText, { timeout: 120_000 });
+  await expect(assistantMessage.getByTestId('message-citations')).toContainText(citationText, { timeout: 120_000 });
+}
+
+async function mockShellApis(
+  page: Page,
+  getMessages: () => PersistedMessage[],
+  getConversations: () => PersistedConversation[],
+) {
   await page.route('**/api/health', (route) =>
     json(route, {
       status: 'healthy',
@@ -49,8 +98,8 @@ async function mockShellApis(page: Page, getMessages: () => PersistedMessage[]) 
 
   await page.route('**/api/conversations**', (route) =>
     json(route, {
-      items: [],
-      total: 0,
+      items: getConversations(),
+      total: getConversations().length,
       page: 1,
       pageSize: 30,
     }),
@@ -202,7 +251,12 @@ async function findSeededDocumentCard(page: Page, fileName: string) {
 
 test('stops a pending generation and retries the latest response with grounded output', async ({ page }) => {
   let persistedMessages: PersistedMessage[] = [];
-  await mockShellApis(page, () => persistedMessages);
+  let persistedConversations: PersistedConversation[] = [];
+  await mockShellApis(
+    page,
+    () => persistedMessages,
+    () => persistedConversations,
+  );
   await installMockChatTransport(page);
   await page.goto('/');
 
@@ -252,15 +306,24 @@ test('stops a pending generation and retries the latest response with grounded o
       updatedAt: '2026-07-06T00:00:05.000Z',
     },
   ];
+  persistedConversations = [
+    {
+      id: 'conversation_retry_1',
+      title: 'Cymbal cargo capacity',
+      status: 'ACTIVE',
+      createdAt: '2026-07-06T00:00:00.000Z',
+      updatedAt: '2026-07-06T00:00:05.000Z',
+      messageCount: persistedMessages.length,
+      lastMessagePreview: 'Retry completed with a grounded answer about cargo capacity.',
+      activeAgentName: 'DocumentAgent',
+    },
+  ];
 
   await page.getByTestId('retry-latest-response').click();
 
-  const assistantMessage = page.getByRole('article').filter({
-    has: page.getByText('Retry completed with a grounded answer about cargo capacity.'),
-  });
+  const assistantMessage = page.getByTestId('assistant-message').last();
   await expect(assistantMessage).toBeVisible();
-  await expect(assistantMessage.getByText('Citations', { exact: true })).toBeVisible();
-  await expect(assistantMessage.getByText('cymbal-starlight-2024.pdf')).toBeVisible();
+  await expect(assistantMessage.getByTestId('message-citations')).toContainText('cymbal-starlight-2024.pdf');
   await page.waitForFunction(() => {
     const state = (window as typeof window & {
       __chatMockState?: { totalRequests: number; abortedRequests: number; completedRequests: number };
@@ -268,6 +331,17 @@ test('stops a pending generation and retries the latest response with grounded o
 
     return state?.totalRequests === 2 && state.abortedRequests === 1 && state.completedRequests === 1;
   });
+
+  const persistedAssistant = await captureAssistantMessageSnapshot(assistantMessage);
+
+  await page.reload();
+
+  await expectPersistedAssistantMessage(
+    page,
+    persistedAssistant,
+    'cargo capacity',
+    'cymbal-starlight-2024.pdf',
+  );
 });
 
 test('answers seeded corpus questions with citations and survives reload', async ({ page, request }) => {
@@ -330,6 +404,10 @@ test('answers seeded corpus questions with citations and survives reload', async
   await page.getByRole('button', { name: 'New Chat' }).click();
   await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible();
 
+  let persistedAssistant: AssistantMessageSnapshot | null = null;
+  let persistedCitation: string | null = null;
+  let persistedRequiredFragment: string | null = null;
+
   for (const corpusQuestion of corpusQuestions) {
     const requestPromise = page.waitForResponse(
       (response) => response.url().includes('/api/chat') && response.request().method() === 'POST',
@@ -348,15 +426,26 @@ test('answers seeded corpus questions with citations and survives reload', async
       await expect(page.getByText(new RegExp(fragment, 'i'))).toBeVisible({ timeout: 120_000 });
     }
 
-    const latestAssistantMessage = page.getByRole('article').filter({
-      has: page.getByText(new RegExp(corpusQuestion.requiredAnswerFragments[0] ?? corpusQuestion.fileName, 'i')).last(),
+    const latestAssistantMessage = page.getByTestId('assistant-message').last();
+    await expect(latestAssistantMessage.getByTestId('message-citations')).toContainText(corpusQuestion.fileName, {
+      timeout: 120_000,
     });
-    await expect(latestAssistantMessage.getByText('Citations', { exact: true })).toBeVisible({ timeout: 120_000 });
-    await expect(latestAssistantMessage.getByText(corpusQuestion.fileName)).toBeVisible({ timeout: 120_000 });
+
+    if (corpusQuestion.fileName === 'cymbal-starlight-2024.pdf') {
+      persistedAssistant = await captureAssistantMessageSnapshot(latestAssistantMessage);
+      persistedCitation = corpusQuestion.fileName;
+      persistedRequiredFragment = corpusQuestion.requiredAnswerFragments[0] ?? 'cargo';
+    }
   }
 
-  const persistedFragment = corpusQuestions.at(-1)?.requiredAnswerFragments[0] ?? 'cargo';
   await page.reload();
-  await expect(page.getByText(new RegExp(persistedFragment, 'i'))).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText('Citations', { exact: true })).toBeVisible({ timeout: 120_000 });
+  expect(persistedAssistant).not.toBeNull();
+  expect(persistedCitation).not.toBeNull();
+  expect(persistedRequiredFragment).not.toBeNull();
+  await expectPersistedAssistantMessage(
+    page,
+    persistedAssistant!,
+    persistedRequiredFragment!,
+    persistedCitation!,
+  );
 });
