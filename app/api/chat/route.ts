@@ -44,7 +44,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const body = validateWithSchema(chatRequestSchema, await request.json(), 'Invalid chat request payload.');
 
-    return chatService.streamChat({
+    return await chatService.streamChat({
       ...body,
       userId: user.id,
       requestId: requestContext.requestId,

@@ -262,6 +262,38 @@ describe('chat route', () => {
     expect(routeMocks.streamChat).not.toHaveBeenCalled();
   });
 
+  it('returns a structured error when chat service startup rejects', async () => {
+    routeMocks.streamChat.mockRejectedValue(new Error('boom'));
+
+    const request = new Request('https://app.example.com/api/chat', {
+      method: 'POST',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_chat_rejected',
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'user',
+            parts: [{ type: 'text', text: 'Start the stream.' }],
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred.',
+        requestId: 'req_chat_rejected',
+      },
+    });
+  });
+
   it('rejects cross-origin chat requests before reading the request body', async () => {
     const request = new Request('https://app.example.com/api/chat', {
       method: 'POST',

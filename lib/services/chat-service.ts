@@ -75,8 +75,8 @@ function deriveConversationTitle(text: string): string {
   return normalized.length > 80 ? `${normalized.slice(0, 79).trimEnd()}…` : normalized;
 }
 
-function mergeSearchText(current: string | null | undefined, values: string[]): string {
-  const merged = [current ?? '', ...values]
+function buildSearchText(values: string[]): string {
+  const merged = values
     .map((value) => value.trim())
     .filter(Boolean)
     .join('\n\n')
@@ -173,6 +173,31 @@ export class ChatService {
     return this.dependencies.streamResponseFactory ?? createAiSdkUiMessageStreamResponse;
   }
 
+  private async syncConversationSearchText(
+    db: Pick<ChatDb, 'conversation' | 'message'> | Pick<ChatTransactionDb, 'conversation' | 'message'>,
+    conversationId: string,
+  ) {
+    const messages = await db.message.findMany({
+      where: {
+        conversationId,
+        role: {
+          in: [MessageRole.USER, MessageRole.ASSISTANT],
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        content: true,
+      },
+    });
+
+    await db.conversation.update({
+      where: { id: conversationId },
+      data: {
+        searchText: buildSearchText(messages.map((message) => message.content)),
+      },
+    });
+  }
+
   async streamChat(input: StreamChatInput): Promise<Response> {
     const agentInput = toAgentInput(input.messages);
     if (agentInput.length === 0) {
@@ -186,7 +211,7 @@ export class ChatService {
     }
 
     const selectedAgent = await this.resolveAgent(input.userId, input.activeAgentName);
-    const { conversation, userMessage, agentRun, nextSearchText } = await this.db.$transaction(
+    const { conversation, userMessage, agentRun } = await this.db.$transaction(
       async (transaction: ChatTransactionDb) => {
         const conversation = await this.ensureConversation(transaction, {
           userId: input.userId,
@@ -196,7 +221,6 @@ export class ChatService {
           ipAddress: input.ipAddress,
           userAgent: input.userAgent,
         });
-        const nextSearchText = mergeSearchText(conversation.searchText, [latestUserText]);
 
         const userMessage = await transaction.message.create({
           data: {
@@ -209,12 +233,7 @@ export class ChatService {
             },
           },
         });
-        await transaction.conversation.update({
-          where: { id: conversation.id },
-          data: {
-            searchText: nextSearchText,
-          },
-        });
+        await this.syncConversationSearchText(transaction, conversation.id);
         await transaction.auditLog.create({
           data: {
             userId: input.userId,
@@ -266,7 +285,7 @@ export class ChatService {
           },
         });
 
-        return { conversation, userMessage, agentRun, nextSearchText };
+        return { conversation, userMessage, agentRun };
       },
     );
 
@@ -330,13 +349,7 @@ export class ChatService {
                 },
               },
             });
-
-            await transaction.conversation.update({
-              where: { id: conversation.id },
-              data: {
-                searchText: mergeSearchText(nextSearchText, [assistantText]),
-              },
-            });
+            await this.syncConversationSearchText(transaction, conversation.id);
           });
         })
         .catch(async (error) => {
@@ -401,7 +414,6 @@ export class ChatService {
         data: {
           userId: input.userId,
           title: derivedTitle,
-          searchText: input.latestUserText,
         },
       });
       await transaction.auditLog.create({

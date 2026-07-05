@@ -41,6 +41,7 @@ describe('ChatService', () => {
   const conversationCreate = vi.fn();
   const conversationUpdate = vi.fn();
   const messageCreate = vi.fn();
+  const messageFindMany = vi.fn();
   const agentRunCreate = vi.fn();
   const agentRunUpdate = vi.fn();
   const auditLogCreate = vi.fn();
@@ -57,6 +58,7 @@ describe('ChatService', () => {
         },
         message: {
           create: messageCreate,
+          findMany: messageFindMany,
         },
         agentRun: {
           create: agentRunCreate,
@@ -76,6 +78,7 @@ describe('ChatService', () => {
     },
     message: {
       create: messageCreate,
+      findMany: messageFindMany,
     },
     agentRun: {
       create: agentRunCreate,
@@ -92,6 +95,7 @@ describe('ChatService', () => {
     conversationCreate.mockReset();
     conversationUpdate.mockReset();
     messageCreate.mockReset();
+    messageFindMany.mockReset();
     agentRunCreate.mockReset();
     agentRunUpdate.mockReset();
     auditLogCreate.mockReset();
@@ -111,6 +115,7 @@ describe('ChatService', () => {
     messageCreate.mockResolvedValue({
       id: 'message_1',
     });
+    messageFindMany.mockResolvedValue([]);
     agentRunCreate.mockResolvedValue({
       id: 'agent_run_1',
     });
@@ -298,5 +303,153 @@ describe('ChatService', () => {
     expect(assistantPayload.citations[0]).not.toHaveProperty('content');
     expect(assistantPayload.citations[0]).not.toHaveProperty('metadata');
     expect(assistantPayload.citations[0]).not.toHaveProperty('rawPayload');
+  });
+
+  it('rebuilds new conversation search text from persisted messages without duplicating the first prompt', async () => {
+    conversationCreate.mockResolvedValue({
+      id: 'conversation_new_1',
+      userId: 'user_1',
+      title: 'First prompt',
+      status: 'ACTIVE',
+      searchText: 'First prompt',
+      deletedAt: null,
+    });
+    messageCreate.mockResolvedValue({
+      id: 'message_user_1',
+    });
+    messageFindMany.mockResolvedValue([
+      { content: 'First prompt' },
+    ]);
+
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_new_conversation',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      messages: [
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'First prompt' }],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    expect(messageFindMany).toHaveBeenCalledWith({
+      where: {
+        conversationId: 'conversation_new_1',
+        role: { in: ['USER', 'ASSISTANT'] },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        content: true,
+      },
+    });
+    expect(conversationUpdate).toHaveBeenCalledWith({
+      where: { id: 'conversation_new_1' },
+      data: {
+        searchText: 'First prompt',
+      },
+    });
+  });
+
+  it('rebuilds search text from persisted messages instead of stale preloaded conversation text', async () => {
+    conversationFindFirst.mockResolvedValue({
+      id: 'conversation_1',
+      userId: 'user_1',
+      title: 'Existing Chat',
+      status: 'ACTIVE',
+      searchText: 'stale text that should not persist',
+      deletedAt: null,
+    });
+    messageCreate
+      .mockResolvedValueOnce({
+        id: 'message_user_1',
+      })
+      .mockResolvedValueOnce({
+        id: 'message_assistant_1',
+      });
+    messageFindMany
+      .mockResolvedValueOnce([
+        { content: 'Earlier user question' },
+        { content: 'Latest user question' },
+      ])
+      .mockResolvedValueOnce([
+        { content: 'Earlier user question' },
+        { content: 'Latest user question' },
+        { content: 'Latest assistant answer' },
+      ]);
+    toolCallFindMany.mockResolvedValue([]);
+    runAgent.mockResolvedValue({
+      completed: Promise.resolve(),
+      finalOutput: 'Latest assistant answer',
+      activeAgent: { name: 'GeneralAssistantAgent' },
+      lastResponseId: 'response_1',
+    });
+
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'test-model',
+        }),
+      },
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_refresh_search_text',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      conversationId: 'conversation_1',
+      messages: [
+        {
+          role: 'user',
+          parts: [{ type: 'text', text: 'Latest user question' }],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(conversationUpdate).toHaveBeenCalledTimes(2);
+    });
+
+    expect(conversationUpdate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { id: 'conversation_1' },
+        data: {
+          searchText: 'Earlier user question\n\nLatest user question',
+        },
+      }),
+    );
+    expect(conversationUpdate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { id: 'conversation_1' },
+        data: {
+          searchText: 'Earlier user question\n\nLatest user question\n\nLatest assistant answer',
+        },
+      }),
+    );
+    expect(
+      conversationUpdate.mock.calls.every(
+        ([input]) => !String(input.data.searchText).includes('stale text that should not persist'),
+      ),
+    ).toBe(true);
   });
 });
