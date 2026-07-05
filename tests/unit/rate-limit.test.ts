@@ -78,6 +78,29 @@ describe('rateLimit', () => {
     expect(getRateLimitBucketCountForTests()).toBe(3);
   });
 
+  it('isolates capacity by namespace', async () => {
+    const policyA = { limit: 1, windowMs: 10_000, maxBuckets: 1, namespace: 'route-a' };
+    const policyB = { limit: 1, windowMs: 10_000, maxBuckets: 1, namespace: 'route-b' };
+
+    vi.setSystemTime(new Date('2026-07-05T00:00:00.000Z'));
+
+    await rateLimit('shared-client', policyA);
+
+    await expect(rateLimit('shared-client', policyA)).resolves.toMatchObject({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date('2026-07-05T00:00:10.000Z'),
+    });
+
+    await expect(rateLimit('shared-client', policyB)).resolves.toMatchObject({
+      allowed: true,
+      remaining: 0,
+      resetAt: new Date('2026-07-05T00:00:10.000Z'),
+    });
+
+    expect(getRateLimitBucketCountForTests()).toBe(2);
+  });
+
   it('preserves active victim buckets when attacker churn fills capacity', async () => {
     const policy = { limit: 1, windowMs: 10_000, maxBuckets: 3 };
 
