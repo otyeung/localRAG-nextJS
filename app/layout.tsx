@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
+import { siteDescription, siteTitle } from './site-content';
 
 export const metadata: Metadata = {
-  title: 'LocalRAG',
-  description: 'Enterprise RAG foundation',
+  title: siteTitle,
+  description: siteDescription,
 };
 
 export default function RootLayout({
