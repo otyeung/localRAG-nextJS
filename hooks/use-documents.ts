@@ -33,8 +33,8 @@ export type WorkflowRecord = {
 
 export type ReindexDocumentResult = {
   workflowExecutionId: string;
-  externalExecutionId: string | null;
   status: WorkflowRecord['status'];
+  reconciliationRequired: boolean;
 };
 
 type DocumentPayload = {

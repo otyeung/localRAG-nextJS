@@ -58,6 +58,15 @@ vi.mock('@/lib/services/document-service', () => ({
     updatedAt: document.updatedAt,
     deletedAt: document.deletedAt,
   }),
+  toPublicReindexResult: (result: {
+    workflowExecutionId: string;
+    externalExecutionId: string | null;
+    status: string;
+  }) => ({
+    workflowExecutionId: result.workflowExecutionId,
+    status: result.status,
+    reconciliationRequired: result.externalExecutionId === null,
+  }),
 }));
 
 vi.mock('@/lib/services/workflow-service', () => ({
@@ -411,11 +420,34 @@ describe('documents routes', () => {
     await expect(response.json()).resolves.toEqual({
       data: {
         workflowExecutionId: 'workflow_2',
-        externalExecutionId: 'n8n_2',
         status: 'RUNNING',
+        reconciliationRequired: false,
       },
     });
     expect(routeMocks.requestReindex).toHaveBeenCalledWith('user_1', 'document_1', 'req_document_reindex');
+  });
+
+  it('omits external n8n execution ids from public re-index responses', async () => {
+    const request = new Request('https://app.example.com/api/documents/document_1', {
+      method: 'PATCH',
+      headers: {
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'x-request-id': 'req_document_reindex_public',
+      },
+    });
+
+    const response = await reindexDocumentRoute(request, {
+      params: Promise.resolve({ id: 'document_1' }),
+    });
+    const body = await response.json();
+
+    expect(body.data).not.toHaveProperty('externalExecutionId');
+    expect(body.data).toMatchObject({
+      workflowExecutionId: 'workflow_2',
+      status: 'RUNNING',
+      reconciliationRequired: false,
+    });
   });
 
   it('omits internal document storage fields from delete responses', async () => {

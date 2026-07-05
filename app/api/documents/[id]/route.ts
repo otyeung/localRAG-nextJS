@@ -8,7 +8,7 @@ import { getRequestContext } from '@/lib/http/request-context';
 import { enforcePreProvisionRouteRateLimit } from '@/lib/security/pre-provision-rate-limit';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
-import { DocumentService, toPublicDocumentDto } from '@/lib/services/document-service';
+import { DocumentService, toPublicDocumentDto, toPublicReindexResult } from '@/lib/services/document-service';
 
 const documentService = new DocumentService();
 const documentRouteParamsSchema = z.object({
@@ -112,7 +112,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       });
     }
 
-    return jsonOk(await documentService.requestReindex(user.id, id, requestContext.requestId));
+    return jsonOk(toPublicReindexResult(await documentService.requestReindex(user.id, id, requestContext.requestId)));
   } catch (error) {
     return jsonError(toAppError(error), requestContext.requestId);
   }

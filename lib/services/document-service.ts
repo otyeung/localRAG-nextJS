@@ -44,6 +44,18 @@ export type PublicDocumentDto = {
   deletedAt: string | null;
 };
 
+export type ReindexResult = {
+  workflowExecutionId: string;
+  externalExecutionId: string | null;
+  status: keyof typeof WorkflowStatus;
+};
+
+export type PublicReindexResult = {
+  workflowExecutionId: string;
+  status: keyof typeof WorkflowStatus;
+  reconciliationRequired: boolean;
+};
+
 export type DocumentQuery = {
   search?: string;
   status?: keyof typeof DocumentStatus;
@@ -292,7 +304,7 @@ export class DocumentService {
     };
   }
 
-  async requestReindex(userId: string, documentId: string, requestId?: string): Promise<{ workflowExecutionId: string; externalExecutionId: string | null; status: keyof typeof WorkflowStatus }> {
+  async requestReindex(userId: string, documentId: string, requestId?: string): Promise<ReindexResult> {
     const document = await this.db.document.findFirst({
       where: {
         id: documentId,
@@ -416,6 +428,7 @@ export class DocumentService {
           },
         });
         }
+
       });
 
       try {
@@ -444,4 +457,13 @@ export class DocumentService {
       );
     }
   }
+
+}
+
+export function toPublicReindexResult(result: ReindexResult): PublicReindexResult {
+  return {
+    workflowExecutionId: result.workflowExecutionId,
+    status: result.status,
+    reconciliationRequired: result.externalExecutionId === null,
+  };
 }

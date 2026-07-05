@@ -51,8 +51,8 @@ describe('useDocuments', () => {
           JSON.stringify({
             data: {
               workflowExecutionId: 'workflow_1',
-              externalExecutionId: 'n8n_1',
               status: 'RUNNING',
+              reconciliationRequired: false,
             },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
