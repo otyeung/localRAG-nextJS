@@ -11,7 +11,7 @@ export function assertSameOrigin(request: Request): void {
   const host = request.headers.get('host');
 
   if (!origin || !host) {
-    return;
+    throw new AppError('FORBIDDEN', 'Cross-origin mutation rejected.');
   }
 
   const requestUrl = new URL(request.url);
