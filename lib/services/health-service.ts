@@ -167,24 +167,45 @@ async function requestN8nJson(config: N8nHealthConfig, path: string, query?: Rec
       url.searchParams.set(key, value);
     }
 
+    let response: Response;
+
     try {
-      const response = await fetch(url.toString(), {
+      response = await fetch(url.toString(), {
         method: 'GET',
         headers: {
           'X-N8N-API-KEY': config.apiKey,
         },
         signal: AbortSignal.timeout(config.timeoutMs),
       });
+    } catch (error) {
+      lastError = error;
 
-      if (!response.ok) {
-        if (attempt === config.retryCount || !isRetryableStatus(response.status)) {
-          throw new Error('n8n request failed.');
-        }
-
-        await sleep(config.retryDelayMs * 2 ** attempt);
-        continue;
+      if (attempt === config.retryCount) {
+        break;
       }
 
+      await sleep(config.retryDelayMs * 2 ** attempt);
+      continue;
+    }
+
+    if (!response.ok) {
+      const responseError = new Error('n8n request failed.');
+
+      if (!isRetryableStatus(response.status)) {
+        throw responseError;
+      }
+
+      lastError = responseError;
+
+      if (attempt === config.retryCount) {
+        break;
+      }
+
+      await sleep(config.retryDelayMs * 2 ** attempt);
+      continue;
+    }
+
+    try {
       return (await response.json()) as unknown;
     } catch (error) {
       lastError = error;

@@ -9,6 +9,8 @@ const requiredEnvEntries = {
   DATABASE_URL: 'postgresql://localhost:5432/localrag_nextjs',
   N8N_BASE_URL: 'https://n8n.example.com',
   N8N_API_KEY: 'n8n-test',
+  N8N_RETRY_COUNT: '3',
+  N8N_RETRY_DELAY: '1',
   OPENAI_API_KEY: 'sk-test',
   OPENAI_MODEL: 'gpt-4.1-mini',
   QDRANT_URL: 'http://qdrant.example.com:6333',
@@ -241,6 +243,163 @@ describe('HealthService', () => {
         }),
       ]),
     );
+  });
+
+  it('does not retry non-retryable 401 responses from n8n', async () => {
+    applyRequiredEnv({
+      N8N_RETRY_COUNT: '3',
+      N8N_RETRY_DELAY: '1',
+    });
+
+    let healthzCalls = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url === 'https://n8n.example.com/healthz') {
+        healthzCalls += 1;
+        return new Response(JSON.stringify({ message: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://n8n.example.com/api/v1/workflows?active=true') {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'degraded',
+          message: 'n8n API unavailable or workflows could not be listed.',
+        }),
+      ]),
+    );
+    expect(healthzCalls).toBe(1);
+  });
+
+  it('does not retry non-retryable 404 responses from n8n', async () => {
+    applyRequiredEnv({
+      N8N_RETRY_COUNT: '3',
+      N8N_RETRY_DELAY: '1',
+    });
+
+    let healthzCalls = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url === 'https://n8n.example.com/healthz') {
+        healthzCalls += 1;
+        return new Response(JSON.stringify({ message: 'Not found' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://n8n.example.com/api/v1/workflows?active=true') {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'degraded',
+          message: 'n8n API unavailable or workflows could not be listed.',
+        }),
+      ]),
+    );
+    expect(healthzCalls).toBe(1);
+  });
+
+  it('retries retryable 5xx responses from n8n', async () => {
+    applyRequiredEnv({
+      N8N_RETRY_COUNT: '2',
+      N8N_RETRY_DELAY: '1',
+    });
+
+    let healthzCalls = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (url === 'https://n8n.example.com/healthz') {
+        healthzCalls += 1;
+        if (healthzCalls < 3) {
+          return new Response(JSON.stringify({ message: 'Server error' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://n8n.example.com/api/v1/workflows?active=true') {
+        return new Response(JSON.stringify({ data: [{ id: 'wf_1' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'n8n',
+          status: 'healthy',
+          message: 'n8n is healthy with 1 active workflows.',
+        }),
+      ]),
+    );
+    expect(healthzCalls).toBe(3);
   });
 
   it('isolates a missing Qdrant URL to the Qdrant check', async () => {
