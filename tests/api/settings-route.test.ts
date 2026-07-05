@@ -31,6 +31,10 @@ import { GET, PATCH } from '@/app/api/settings/route';
 
 describe('settings route', () => {
   beforeEach(() => {
+    routeMocks.getCurrentUser.mockReset();
+    routeMocks.getForUser.mockReset();
+    routeMocks.updateForUserWithAudit.mockReset();
+    routeMocks.rateLimit.mockReset();
     routeMocks.getCurrentUser.mockResolvedValue({
       id: 'user_1',
       displayName: 'Local User',
@@ -73,7 +77,15 @@ describe('settings route', () => {
     });
     expect(routeMocks.getCurrentUser).toHaveBeenCalledWith(request);
     expect(routeMocks.getForUser).toHaveBeenCalledWith('user_1');
-    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:get:context:unknown:vitest',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
       'settings:get:user_1:unknown',
       expect.objectContaining({
         namespace: 'settings-api',
@@ -119,7 +131,15 @@ describe('settings route', () => {
         userAgent: 'vitest',
       },
     );
-    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      1,
+      'settings:pre:patch:context:unknown:vitest',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+    expect(routeMocks.rateLimit).toHaveBeenNthCalledWith(
+      2,
       'settings:patch:user_1:unknown',
       expect.objectContaining({
         namespace: 'settings-api',
@@ -167,6 +187,7 @@ describe('settings route', () => {
     const response = await GET(request);
 
     expect(response.status).toBe(429);
+    expect(routeMocks.getCurrentUser).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       error: {
         code: 'RATE_LIMITED',
@@ -174,5 +195,44 @@ describe('settings route', () => {
         requestId: 'req_limited',
       },
     });
+    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+      'settings:pre:get:context:unknown:unknown',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
+  });
+
+  it('pre-provision rate limits repeated cookie-less settings writes before creating a user', async () => {
+    routeMocks.rateLimit.mockResolvedValueOnce({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const request = new Request('https://app.example.com/api/settings', {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        host: 'app.example.com',
+        origin: 'https://app.example.com',
+        'user-agent': 'vitest',
+        'x-request-id': 'req_pre_auth_limited',
+      },
+      body: JSON.stringify({ theme: 'dark' }),
+    });
+
+    const response = await PATCH(request);
+
+    expect(response.status).toBe(429);
+    expect(routeMocks.getCurrentUser).not.toHaveBeenCalled();
+    expect(routeMocks.updateForUserWithAudit).not.toHaveBeenCalled();
+    expect(routeMocks.rateLimit).toHaveBeenCalledTimes(1);
+    expect(routeMocks.rateLimit).toHaveBeenCalledWith(
+      'settings:pre:patch:context:unknown:vitest',
+      expect.objectContaining({
+        namespace: 'settings-api-pre-auth',
+      }),
+    );
   });
 });

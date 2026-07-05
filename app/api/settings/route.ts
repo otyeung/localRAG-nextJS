@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
+import { getAnonymousCookieValue, isAnonymousFingerprint } from '@/lib/auth/anonymous-provider';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { AppError, toAppError } from '@/lib/http/api-errors';
 import { jsonError, jsonOk } from '@/lib/http/api-response';
-import { getRequestContext } from '@/lib/http/request-context';
+import { getRequestContext, type RequestContext } from '@/lib/http/request-context';
 import { assertSameOrigin } from '@/lib/security/csrf';
 import { rateLimit } from '@/lib/security/rate-limit';
 import { SettingsService } from '@/lib/services/settings-service';
@@ -34,10 +35,39 @@ async function enforceRateLimit(key: string): Promise<void> {
   }
 }
 
+function buildPreProvisionRateLimitKey(request: Request, requestContext: RequestContext, method: 'get' | 'patch'): string {
+  const anonymousCookie = getAnonymousCookieValue(request);
+
+  if (isAnonymousFingerprint(anonymousCookie)) {
+    return `settings:pre:${method}:cookie:${anonymousCookie}`;
+  }
+
+  return `settings:pre:${method}:context:${requestContext.ipAddress}:${requestContext.userAgent}`;
+}
+
+async function enforcePreProvisionRateLimit(
+  request: Request,
+  requestContext: RequestContext,
+  method: 'get' | 'patch',
+): Promise<void> {
+  const result = await rateLimit(buildPreProvisionRateLimitKey(request, requestContext, method), {
+    namespace: 'settings-api-pre-auth',
+    limit: 30,
+    windowMs: 60_000,
+  });
+
+  if (!result.allowed) {
+    throw new AppError('RATE_LIMITED', 'Too many settings requests.', {
+      resetAt: result.resetAt.toISOString(),
+    });
+  }
+}
+
 export async function GET(request: Request): Promise<Response> {
   const requestContext = getRequestContext(request);
 
   try {
+    await enforcePreProvisionRateLimit(request, requestContext, 'get');
     const user = await getCurrentUser(request);
     await enforceRateLimit(`settings:get:${user.id}:${requestContext.ipAddress}`);
     const settings = await settingsService.getForUser(user.id);
@@ -53,6 +83,7 @@ export async function PATCH(request: Request): Promise<Response> {
 
   try {
     assertSameOrigin(request);
+    await enforcePreProvisionRateLimit(request, requestContext, 'patch');
 
     let json: unknown;
     try {
