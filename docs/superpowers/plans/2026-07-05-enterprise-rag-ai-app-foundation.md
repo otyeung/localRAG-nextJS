@@ -325,7 +325,7 @@ import { createEnv } from '@/lib/config/env';
 describe('createEnv', () => {
   it('parses required server configuration', () => {
     const env = createEnv({
-      OPENAI_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'test-openai-key',
       OPENAI_MODEL: 'gpt-4.1-mini',
       DATABASE_URL: 'postgresql://app:pw@localhost:5432/db',
       N8N_BASE_URL: 'http://n8n:5678',
@@ -350,7 +350,7 @@ describe('createEnv', () => {
   it('rejects invalid URLs and numeric values', () => {
     expect(() =>
       createEnv({
-        OPENAI_API_KEY: 'sk-test',
+        OPENAI_API_KEY: 'test-openai-key',
         OPENAI_MODEL: 'gpt-4.1-mini',
         DATABASE_URL: 'not-a-url',
         N8N_BASE_URL: 'http://n8n:5678',

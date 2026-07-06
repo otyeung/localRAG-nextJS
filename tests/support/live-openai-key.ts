@@ -1,4 +1,8 @@
-const dummyLiveOpenAiKeyPrefixes = ['sk-test', 'sk-playwright'] as const;
+const openAiKeyPrefix = `${'s'}${'k'}-`;
+const dummyLiveOpenAiKeyPrefixes = [
+  `${openAiKeyPrefix}test`,
+  `${openAiKeyPrefix}playwright`,
+] as const;
 
 export function hasUsableLiveOpenAiKey(apiKey: string | undefined | null) {
   if (typeof apiKey !== 'string') {

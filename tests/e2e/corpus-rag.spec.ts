@@ -82,7 +82,7 @@ async function expectPersistedAssistantMessage(
 }
 
 async function installSeedCorpusAnonymousCookie(page: Page) {
-  process.env.OPENAI_API_KEY ??= 'sk-playwright';
+  process.env.OPENAI_API_KEY ??= 'playwright-openai-placeholder';
   process.env.DATABASE_URL ??= 'postgresql://localhost:5432/localrag_nextjs?schema=public';
   process.env.N8N_BASE_URL ??= 'http://127.0.0.1:5678';
   process.env.N8N_WEBHOOK_SECRET ??= 'playwright-webhook-secret';

@@ -104,7 +104,7 @@ export function createEnv(source: EnvSource): AppEnv {
 }
 
 const testEnvDefaults: EnvSource = {
-  OPENAI_API_KEY: 'sk-test',
+  OPENAI_API_KEY: 'test-openai-key',
   OPENAI_MODEL: 'gpt-4.1-mini',
   OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
   DATABASE_URL: 'postgresql://localhost:5432/db',

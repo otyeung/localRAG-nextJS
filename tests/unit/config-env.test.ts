@@ -7,7 +7,7 @@ import { createEnv } from '@/lib/config/env';
 describe('createEnv', () => {
   it('parses required server configuration', () => {
     const env = createEnv({
-      OPENAI_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'test-openai-key',
       OPENAI_MODEL: 'gpt-4.1-mini',
       OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
       DATABASE_URL: 'postgresql://localhost:5432/db',
@@ -37,7 +37,7 @@ describe('createEnv', () => {
 
   it('allows n8n api auth to be configured later while preserving webhook auth', () => {
     const env = createEnv({
-      OPENAI_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'test-openai-key',
       OPENAI_MODEL: 'gpt-4.1-mini',
       OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
       DATABASE_URL: 'postgresql://localhost:5432/db',
@@ -63,7 +63,7 @@ describe('createEnv', () => {
   it('rejects invalid URLs and numeric values', () => {
     expect(() =>
       createEnv({
-        OPENAI_API_KEY: 'sk-test',
+        OPENAI_API_KEY: 'test-openai-key',
         OPENAI_MODEL: 'gpt-4.1-mini',
         OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
         DATABASE_URL: 'not-a-url',

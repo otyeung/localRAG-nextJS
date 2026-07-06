@@ -11,7 +11,7 @@ const requiredEnvEntries = {
   N8N_API_KEY: 'n8n-test',
   N8N_RETRY_COUNT: '3',
   N8N_RETRY_DELAY: '1',
-  OPENAI_API_KEY: 'sk-test',
+  OPENAI_API_KEY: 'test-openai-key',
   OPENAI_MODEL: 'gpt-4.1-mini',
   QDRANT_URL: 'http://qdrant.example.com:6333',
   QDRANT_COLLECTION: 'documents',
