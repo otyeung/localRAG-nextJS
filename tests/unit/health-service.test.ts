@@ -24,8 +24,13 @@ async function loadHealthService() {
   return module.HealthService;
 }
 
-function applyRequiredEnv(overrides: Partial<Record<keyof typeof requiredEnvEntries, string>>) {
-  for (const [key, value] of Object.entries({ ...requiredEnvEntries, ...overrides })) {
+function applyRequiredEnv(
+  overrides: Partial<Record<keyof typeof requiredEnvEntries, string>>,
+) {
+  for (const [key, value] of Object.entries({
+    ...requiredEnvEntries,
+    ...overrides,
+  })) {
     vi.stubEnv(key, value);
   }
 }
@@ -64,16 +69,127 @@ describe('HealthService', () => {
       version: '0.1.0',
       uptimeSeconds: 321,
     });
-    expect(health.checks.map((check) => check.name)).toEqual(['app', 'database', 'n8n', 'qdrant', 'openai']);
-    expect(health.checks.every((check) => check.status === 'healthy')).toBe(true);
+    expect(health.checks.map((check) => check.name)).toEqual([
+      'app',
+      'database',
+      'n8n',
+      'qdrant',
+      'openai',
+    ]);
+    expect(health.checks.every((check) => check.status === 'healthy')).toBe(
+      true,
+    );
     expect(JSON.stringify(health)).not.toContain('sk-');
+  });
+
+  it('marks database unhealthy when the Prisma application schema is missing', async () => {
+    const queryRawUnsafe = vi.fn().mockResolvedValue([{ '?column?': 1 }]);
+    const userCount = vi
+      .fn()
+      .mockRejectedValue(new Error('The table `public.User` does not exist.'));
+
+    vi.doMock('@/lib/db/prisma', () => ({
+      prisma: {
+        $queryRawUnsafe: queryRawUnsafe,
+        user: {
+          count: userCount,
+        },
+      },
+    }));
+
+    const LoadedHealthService = await loadHealthService();
+    const service = new LoadedHealthService({
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      getUptimeSeconds: () => 321,
+      getN8nStatus: vi.fn().mockResolvedValue({
+        healthy: true,
+        workflowCount: 2,
+      }),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      isOpenAiConfigured: () => true,
+      getOpenAiModel: () => 'gpt-4.1-mini',
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getHealth();
+
+    expect(queryRawUnsafe).toHaveBeenCalledWith('SELECT 1');
+    expect(userCount).toHaveBeenCalledWith({ take: 1 });
+    expect(health.status).toBe('unhealthy');
+    expect(health.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'database',
+          status: 'unhealthy',
+          message: 'Database query failed.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(health)).not.toContain('public.User');
+  });
+
+  it('reports every Docker fleet service as healthy when runtime checks pass', async () => {
+    const service = new HealthService({
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      getUptimeSeconds: () => 321,
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkRedis: vi.fn().mockResolvedValue(undefined),
+      checkN8nRuntime: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getDockerFleetHealth();
+
+    expect(health.status).toBe('healthy');
+    expect(health.services.map((serviceCheck) => serviceCheck.name)).toEqual([
+      'nextjs',
+      'postgres',
+      'redis',
+      'qdrant',
+      'qdrant-init',
+      'n8n',
+    ]);
+    expect(
+      health.services.every(
+        (serviceCheck) => serviceCheck.status === 'healthy',
+      ),
+    ).toBe(true);
+  });
+
+  it('marks Docker fleet health unhealthy when any service check fails', async () => {
+    const service = new HealthService({
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      getUptimeSeconds: () => 321,
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkRedis: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+      checkN8nRuntime: vi.fn().mockResolvedValue(undefined),
+      checkQdrantCollection: vi.fn().mockResolvedValue(true),
+      getQdrantCollection: () => 'documents',
+    });
+
+    const health = await service.getDockerFleetHealth();
+
+    expect(health.status).toBe('unhealthy');
+    expect(health.services).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'redis',
+          status: 'unhealthy',
+          message: 'Redis connection failed.',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(health)).not.toContain('redis unavailable');
   });
 
   it('marks critical dependencies unhealthy and non-critical dependencies degraded', async () => {
     const service = new HealthService({
       now: () => new Date('2026-01-01T00:00:00.000Z'),
       getUptimeSeconds: () => 12,
-      checkDatabase: vi.fn().mockRejectedValue(new Error('postgresql://secret-host/db')),
+      checkDatabase: vi
+        .fn()
+        .mockRejectedValue(new Error('postgresql://secret-host/db')),
       getN8nStatus: vi.fn().mockRejectedValue(new Error('n8n down')),
       checkQdrantCollection: vi.fn().mockResolvedValue(false),
       isOpenAiConfigured: () => false,
@@ -105,9 +221,15 @@ describe('HealthService', () => {
         workflowCount: 1,
       }),
       checkQdrantCollection: vi.fn().mockResolvedValue(false),
-      isOpenAiConfigured: vi.fn().mockRejectedValue(new Error('missing OPENAI_API_KEY')),
-      getOpenAiModel: vi.fn().mockRejectedValue(new Error('missing OPENAI_MODEL')),
-      getQdrantCollection: vi.fn().mockRejectedValue(new Error('missing QDRANT_COLLECTION')),
+      isOpenAiConfigured: vi
+        .fn()
+        .mockRejectedValue(new Error('missing OPENAI_API_KEY')),
+      getOpenAiModel: vi
+        .fn()
+        .mockRejectedValue(new Error('missing OPENAI_MODEL')),
+      getQdrantCollection: vi
+        .fn()
+        .mockRejectedValue(new Error('missing QDRANT_COLLECTION')),
     });
 
     const health = await service.getHealth();
@@ -140,7 +262,9 @@ describe('HealthService', () => {
         healthy: true,
         workflowCount: 1,
       }),
-      checkQdrantCollection: vi.fn().mockRejectedValue(new Error('qdrant ping failed')),
+      checkQdrantCollection: vi
+        .fn()
+        .mockRejectedValue(new Error('qdrant ping failed')),
       isOpenAiConfigured: () => true,
       getOpenAiModel: () => 'gpt-4.1-mini',
       getQdrantCollection: () => 'documents',
@@ -167,7 +291,12 @@ describe('HealthService', () => {
     });
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
 
       if (url === 'https://n8n.example.com/healthz') {
         return new Response(JSON.stringify({ status: 'ok' }), {
@@ -177,10 +306,15 @@ describe('HealthService', () => {
       }
 
       if (url === 'https://n8n.example.com/api/v1/workflows?active=true') {
-        return new Response(JSON.stringify({ data: [{ id: 'wf_1', name: 'Ingestion', active: true }] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({
+            data: [{ id: 'wf_1', name: 'Ingestion', active: true }],
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
       }
 
       throw new Error(`Unexpected fetch URL: ${url}`);
@@ -219,7 +353,12 @@ describe('HealthService', () => {
     const requestedUrls: string[] = [];
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
       requestedUrls.push(url);
 
       if (url === 'https://n8n.example.com/n8n/healthz') {
@@ -230,10 +369,15 @@ describe('HealthService', () => {
       }
 
       if (url === 'https://n8n.example.com/n8n/api/v1/workflows?active=true') {
-        return new Response(JSON.stringify({ data: [{ id: 'wf_1', name: 'Ingestion', active: true }] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({
+            data: [{ id: 'wf_1', name: 'Ingestion', active: true }],
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
       }
 
       throw new Error(`Unexpected fetch URL: ${url}`);
@@ -372,7 +516,12 @@ describe('HealthService', () => {
     let healthzCalls = 0;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
 
       if (url === 'https://n8n.example.com/healthz') {
         healthzCalls += 1;
@@ -422,7 +571,12 @@ describe('HealthService', () => {
     let healthzCalls = 0;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
 
       if (url === 'https://n8n.example.com/healthz') {
         healthzCalls += 1;
@@ -472,7 +626,12 @@ describe('HealthService', () => {
     let healthzCalls = 0;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
 
       if (url === 'https://n8n.example.com/healthz') {
         healthzCalls += 1;

@@ -1,11 +1,19 @@
 import 'server-only';
 
+import { createConnection } from 'node:net';
+
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 import packageMetadata from '@/package.json';
 import { resolveN8nUrl } from '@/lib/n8n/url';
+import {
+  DEFAULT_OPENAI_API_URL,
+  isHostedOpenAiApiUrl,
+} from '@/lib/openai/api-url';
 
 export type HealthCheckName = 'app' | 'database' | 'n8n' | 'qdrant' | 'openai';
+export type DockerFleetServiceName =
+  'nextjs' | 'postgres' | 'redis' | 'qdrant' | 'qdrant-init' | 'n8n';
 export type HealthCheckStatus = 'healthy' | 'degraded' | 'unhealthy';
 
 export type SystemHealthCheckDto = {
@@ -24,6 +32,16 @@ export type SystemHealthDto = {
   checks: SystemHealthCheckDto[];
 };
 
+export type DockerFleetServiceCheckDto = Omit<SystemHealthCheckDto, 'name'> & {
+  name: DockerFleetServiceName;
+};
+
+export type DockerFleetHealthDto = {
+  status: HealthCheckStatus;
+  checkedAt: string;
+  services: DockerFleetServiceCheckDto[];
+};
+
 type N8nSnapshot = {
   healthy: boolean;
   workflowCount: number;
@@ -37,7 +55,9 @@ type HealthServiceDependencies = {
   getUptimeSeconds?: () => number;
   checkDatabase?: () => Promise<void>;
   getN8nStatus?: () => Promise<N8nSnapshot>;
+  checkN8nRuntime?: () => Promise<void>;
   checkQdrantCollection?: () => Promise<boolean>;
+  checkRedis?: () => Promise<void>;
   isOpenAiConfigured?: () => Awaitable<boolean>;
   getOpenAiModel?: () => Awaitable<string>;
   getQdrantCollection?: () => Awaitable<string>;
@@ -53,12 +73,19 @@ type N8nHealthConfig = {
 
 type OpenAiHealthConfig = {
   apiKey: string;
+  apiUrl: string;
   model: string;
 };
 
 type QdrantHealthConfig = {
   url: string;
   collection: string;
+};
+
+type RedisHealthConfig = {
+  host: string;
+  port: number;
+  timeoutMs: number;
 };
 
 const DEFAULT_N8N_TIMEOUT_MS = 30_000;
@@ -100,7 +127,11 @@ function readUrlEnv(name: string): string | null {
   }
 }
 
-function readPositiveIntEnv(name: string, fallback: number, minimum = 1): number {
+function readPositiveIntEnv(
+  name: string,
+  fallback: number,
+  minimum = 1,
+): number {
   const value = readTrimmedEnv(name);
 
   if (!value) {
@@ -123,21 +154,34 @@ function readN8nHealthConfig(): N8nHealthConfig | null {
     baseUrl,
     apiKey,
     timeoutMs: readPositiveIntEnv('N8N_TIMEOUT', DEFAULT_N8N_TIMEOUT_MS),
-    retryCount: readPositiveIntEnv('N8N_RETRY_COUNT', DEFAULT_N8N_RETRY_COUNT, 0),
-    retryDelayMs: readPositiveIntEnv('N8N_RETRY_DELAY', DEFAULT_N8N_RETRY_DELAY_MS),
+    retryCount: readPositiveIntEnv(
+      'N8N_RETRY_COUNT',
+      DEFAULT_N8N_RETRY_COUNT,
+      0,
+    ),
+    retryDelayMs: readPositiveIntEnv(
+      'N8N_RETRY_DELAY',
+      DEFAULT_N8N_RETRY_DELAY_MS,
+    ),
   };
 }
 
 function readOpenAiHealthConfig(): OpenAiHealthConfig | null {
   const apiKey = readTrimmedEnv('OPENAI_API_KEY');
+  const apiUrl = readUrlEnv('OPENAI_API_URL') ?? DEFAULT_OPENAI_API_URL;
   const model = readTrimmedEnv('OPENAI_MODEL');
 
-  if (!apiKey || !model) {
+  if (!model) {
+    return null;
+  }
+
+  if (isHostedOpenAiApiUrl(apiUrl) && !apiKey) {
     return null;
   }
 
   return {
-    apiKey,
+    apiKey: apiKey ?? 'local-openai-compatible-placeholder',
+    apiUrl,
     model,
   };
 }
@@ -160,6 +204,29 @@ function readQdrantHealthConfig(): QdrantHealthConfig | null {
   };
 }
 
+function readRedisHealthConfig(): RedisHealthConfig | null {
+  const redisUrl = readTrimmedEnv('REDIS_URL');
+
+  if (!redisUrl) {
+    return null;
+  }
+
+  try {
+    const url = new URL(redisUrl);
+    if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') {
+      return null;
+    }
+
+    return {
+      host: url.hostname,
+      port: url.port ? Number.parseInt(url.port, 10) : 6379,
+      timeoutMs: 2_000,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -168,7 +235,11 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-async function requestN8nJson(config: N8nHealthConfig, path: string, query?: Record<string, string>): Promise<unknown> {
+async function requestN8nJson(
+  config: N8nHealthConfig,
+  path: string,
+  query?: Record<string, string>,
+): Promise<unknown> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
@@ -236,6 +307,68 @@ async function defaultCheckDatabase() {
   const { prisma } = await import('@/lib/db/prisma');
 
   await prisma.$queryRawUnsafe('SELECT 1');
+  await prisma.user.count({ take: 1 });
+}
+
+async function checkTcpConnection(config: RedisHealthConfig): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({
+      host: config.host,
+      port: config.port,
+    });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error('TCP health check timed out.'));
+    }, config.timeoutMs);
+
+    socket.once('connect', () => {
+      clearTimeout(timeout);
+      socket.end();
+      resolve();
+    });
+    socket.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+async function defaultCheckRedis(): Promise<void> {
+  const config = readRedisHealthConfig();
+
+  if (!config) {
+    throw new Error('Redis configuration is incomplete.');
+  }
+
+  await checkTcpConnection(config);
+}
+
+async function defaultCheckN8nRuntime(): Promise<void> {
+  const baseUrl = readUrlEnv('N8N_BASE_URL');
+
+  if (!baseUrl) {
+    throw new Error('n8n configuration is incomplete.');
+  }
+
+  const response = await fetch(resolveN8nUrl(baseUrl, '/healthz'), {
+    signal: AbortSignal.timeout(
+      readPositiveIntEnv('N8N_TIMEOUT', DEFAULT_N8N_TIMEOUT_MS),
+    ),
+  });
+
+  if (!response.ok) {
+    throw new Error('n8n health endpoint failed.');
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (
+    !isRecord(payload) ||
+    String(payload.status ?? '')
+      .trim()
+      .toLowerCase() !== 'ok'
+  ) {
+    throw new Error('n8n health payload is invalid.');
+  }
 }
 
 async function defaultGetN8nStatus(): Promise<N8nSnapshot> {
@@ -273,7 +406,9 @@ async function defaultGetN8nStatus(): Promise<N8nSnapshot> {
       typeof healthResponse.status === 'string' &&
       healthResponse.status.trim().toLowerCase() === 'ok';
     const workflowCount =
-      isRecord(workflowResponse) && Array.isArray(workflowResponse.data) ? workflowResponse.data.length : 0;
+      isRecord(workflowResponse) && Array.isArray(workflowResponse.data)
+        ? workflowResponse.data.length
+        : 0;
 
     return {
       healthy,
@@ -332,7 +467,9 @@ async function defaultGetQdrantCollection() {
   return config.collection;
 }
 
-function summarizeStatus(checks: SystemHealthCheckDto[]): HealthCheckStatus {
+function summarizeStatus(
+  checks: Array<{ status: HealthCheckStatus }>,
+): HealthCheckStatus {
   if (checks.some((check) => check.status === 'unhealthy')) {
     return 'unhealthy';
   }
@@ -349,20 +486,29 @@ export class HealthService {
   private readonly getUptimeSeconds: () => number;
   private readonly checkDatabase: () => Promise<void>;
   private readonly getN8nStatus: () => Promise<N8nSnapshot>;
+  private readonly checkN8nRuntime: () => Promise<void>;
   private readonly checkQdrantCollection: () => Promise<boolean>;
+  private readonly checkRedis: () => Promise<void>;
   private readonly isOpenAiConfigured: () => Awaitable<boolean>;
   private readonly getOpenAiModel: () => Awaitable<string>;
   private readonly getQdrantCollection: () => Awaitable<string>;
 
   constructor(dependencies: HealthServiceDependencies = {}) {
     this.now = dependencies.now ?? (() => new Date());
-    this.getUptimeSeconds = dependencies.getUptimeSeconds ?? (() => process.uptime());
+    this.getUptimeSeconds =
+      dependencies.getUptimeSeconds ?? (() => process.uptime());
     this.checkDatabase = dependencies.checkDatabase ?? defaultCheckDatabase;
     this.getN8nStatus = dependencies.getN8nStatus ?? defaultGetN8nStatus;
-    this.checkQdrantCollection = dependencies.checkQdrantCollection ?? defaultCheckQdrantCollection;
-    this.isOpenAiConfigured = dependencies.isOpenAiConfigured ?? defaultIsOpenAiConfigured;
+    this.checkN8nRuntime =
+      dependencies.checkN8nRuntime ?? defaultCheckN8nRuntime;
+    this.checkQdrantCollection =
+      dependencies.checkQdrantCollection ?? defaultCheckQdrantCollection;
+    this.checkRedis = dependencies.checkRedis ?? defaultCheckRedis;
+    this.isOpenAiConfigured =
+      dependencies.isOpenAiConfigured ?? defaultIsOpenAiConfigured;
     this.getOpenAiModel = dependencies.getOpenAiModel ?? defaultGetOpenAiModel;
-    this.getQdrantCollection = dependencies.getQdrantCollection ?? defaultGetQdrantCollection;
+    this.getQdrantCollection =
+      dependencies.getQdrantCollection ?? defaultGetQdrantCollection;
   }
 
   async getHealth(): Promise<SystemHealthDto> {
@@ -385,7 +531,47 @@ export class HealthService {
     };
   }
 
-  private async buildAppCheck(checkedAt: string, uptimeSeconds: number): Promise<SystemHealthCheckDto> {
+  async getDockerFleetHealth(): Promise<DockerFleetHealthDto> {
+    const checkedAt = this.now().toISOString();
+    const uptimeSeconds = Math.floor(this.getUptimeSeconds());
+    const services = await Promise.all([
+      this.buildNextjsFleetCheck(checkedAt, uptimeSeconds),
+      this.buildDockerServiceCheck(
+        'postgres',
+        checkedAt,
+        this.checkDatabase,
+        'PostgreSQL connection verified.',
+        'PostgreSQL connection failed.',
+      ),
+      this.buildDockerServiceCheck(
+        'redis',
+        checkedAt,
+        this.checkRedis,
+        'Redis connection verified.',
+        'Redis connection failed.',
+      ),
+      this.buildQdrantFleetCheck('qdrant', checkedAt),
+      this.buildQdrantFleetCheck('qdrant-init', checkedAt),
+      this.buildDockerServiceCheck(
+        'n8n',
+        checkedAt,
+        this.checkN8nRuntime,
+        'n8n runtime health endpoint verified.',
+        'n8n runtime health endpoint failed.',
+      ),
+    ]);
+
+    return {
+      status: summarizeStatus(services),
+      checkedAt,
+      services,
+    };
+  }
+
+  private async buildAppCheck(
+    checkedAt: string,
+    uptimeSeconds: number,
+  ): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
 
     return {
@@ -397,7 +583,95 @@ export class HealthService {
     };
   }
 
-  private async buildDatabaseCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
+  private async buildNextjsFleetCheck(
+    checkedAt: string,
+    uptimeSeconds: number,
+  ): Promise<DockerFleetServiceCheckDto> {
+    const startedAt = performance.now();
+
+    return {
+      name: 'nextjs',
+      status: 'healthy',
+      message: `Next.js is running with ${uptimeSeconds}s uptime.`,
+      checkedAt,
+      latencyMs: roundLatency(startedAt),
+    };
+  }
+
+  private async buildDockerServiceCheck(
+    name: DockerFleetServiceName,
+    checkedAt: string,
+    check: () => Promise<void>,
+    healthyMessage: string,
+    unhealthyMessage: string,
+  ): Promise<DockerFleetServiceCheckDto> {
+    const startedAt = performance.now();
+
+    try {
+      await check();
+
+      return {
+        name,
+        status: 'healthy',
+        message: healthyMessage,
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    } catch {
+      return {
+        name,
+        status: 'unhealthy',
+        message: unhealthyMessage,
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    }
+  }
+
+  private async buildQdrantFleetCheck(
+    name: 'qdrant' | 'qdrant-init',
+    checkedAt: string,
+  ): Promise<DockerFleetServiceCheckDto> {
+    const startedAt = performance.now();
+
+    try {
+      const collection = await this.getQdrantCollection();
+      if (!collection.trim()) {
+        throw new Error('Qdrant configuration is incomplete.');
+      }
+
+      const available = await this.checkQdrantCollection();
+      if (!available) {
+        throw new Error('Qdrant collection unavailable.');
+      }
+
+      return {
+        name,
+        status: 'healthy',
+        message:
+          name === 'qdrant'
+            ? `Qdrant collection "${collection}" is available.`
+            : `Qdrant collection "${collection}" bootstrap is complete.`,
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    } catch {
+      return {
+        name,
+        status: 'unhealthy',
+        message:
+          name === 'qdrant'
+            ? 'Qdrant collection is unavailable.'
+            : 'Qdrant collection bootstrap is incomplete.',
+        checkedAt,
+        latencyMs: roundLatency(startedAt),
+      };
+    }
+  }
+
+  private async buildDatabaseCheck(
+    checkedAt: string,
+  ): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
 
     try {
@@ -421,12 +695,15 @@ export class HealthService {
     }
   }
 
-  private async buildN8nCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
+  private async buildN8nCheck(
+    checkedAt: string,
+  ): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
 
     try {
       const snapshot = await this.getN8nStatus();
-      const missingApiKey = Boolean(readUrlEnv('N8N_BASE_URL')) && !readTrimmedEnv('N8N_API_KEY');
+      const missingApiKey =
+        Boolean(readUrlEnv('N8N_BASE_URL')) && !readTrimmedEnv('N8N_API_KEY');
 
       return {
         name: 'n8n',
@@ -450,7 +727,9 @@ export class HealthService {
     }
   }
 
-  private async buildQdrantCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
+  private async buildQdrantCheck(
+    checkedAt: string,
+  ): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
 
     try {
@@ -480,7 +759,9 @@ export class HealthService {
     }
   }
 
-  private async buildOpenAiCheck(checkedAt: string): Promise<SystemHealthCheckDto> {
+  private async buildOpenAiCheck(
+    checkedAt: string,
+  ): Promise<SystemHealthCheckDto> {
     const startedAt = performance.now();
 
     try {
