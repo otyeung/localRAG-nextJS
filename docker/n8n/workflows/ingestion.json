@@ -12,10 +12,7 @@
       "name": "Webhook Ingestion",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [
-        220,
-        280
-      ],
+      "position": [220, 280],
       "parameters": {
         "httpMethod": "POST",
         "path": "ingestion",
@@ -28,10 +25,7 @@
       "name": "Validate Webhook Secret",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        340,
-        280
-      ],
+      "position": [340, 280],
       "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "const [item] = items;\nconst headers = item.json.headers && typeof item.json.headers === 'object' ? item.json.headers : {};\nconst normalizedHeaders = Object.fromEntries(Object.entries(headers).map(([key, value]) => [String(key).toLowerCase(), value]));\nconst expectedSecret = $env.N8N_WEBHOOK_SECRET;\nconst providedSecret = normalizedHeaders['x-n8n-webhook-secret'];\nif (!expectedSecret) {\n  throw new Error('N8N_WEBHOOK_SECRET is not configured');\n}\nif (String(providedSecret ?? '') !== String(expectedSecret)) {\n  throw new Error('invalid webhook secret');\n}\nreturn items;"
@@ -42,13 +36,10 @@
       "name": "Normalize Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        460,
-        280
-      ],
+      "position": [460, 280],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.documentId || !payload.uploadId || !payload.filePath) {\n  throw new Error('ingestion requires documentId, uploadId, and filePath');\n}\nreturn [{ json: {\n  documentId: String(payload.documentId),\n  uploadId: String(payload.uploadId),\n  filePath: String(payload.filePath),\n  fileName: String(payload.fileName ?? payload.filePath.split('/').pop() ?? 'document.pdf'),\n  mimeType: String(payload.mimeType ?? 'application/pdf'),\n  requestId: payload.requestId ? String(payload.requestId) : null,\n  ingestionRunId: crypto.randomUUID(),\n} }];"
+        "jsCode": "function createRunId() {\n  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;\n}\nconst [item] = items;\nconst payload = item.json.body ?? item.json;\nif (!payload.documentId || !payload.uploadId || !payload.filePath) {\n  throw new Error('ingestion requires documentId, uploadId, and filePath');\n}\nreturn [{ json: {\n  documentId: String(payload.documentId),\n  uploadId: String(payload.uploadId),\n  filePath: String(payload.filePath),\n  fileName: String(payload.fileName ?? payload.filePath.split('/').pop() ?? 'document.pdf'),\n  mimeType: String(payload.mimeType ?? 'application/pdf'),\n  requestId: payload.requestId ? String(payload.requestId) : null,\n  ingestionRunId: createRunId(),\n} }];"
       }
     },
     {
@@ -56,10 +47,7 @@
       "name": "Read PDF From Shared Volume",
       "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
-      "position": [
-        700,
-        280
-      ],
+      "position": [700, 280],
       "parameters": {
         "operation": "read",
         "fileSelector": "={{ $json.filePath }}",
@@ -71,10 +59,7 @@
       "name": "Extract PDF Text",
       "type": "n8n-nodes-base.extractFromFile",
       "typeVersion": 1,
-      "position": [
-        940,
-        280
-      ],
+      "position": [940, 280],
       "parameters": {
         "operation": "pdf",
         "binaryPropertyName": "data",
@@ -86,13 +71,10 @@
       "name": "Chunk Text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1180,
-        280
-      ],
+      "position": [1180, 280],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const [item] = items;\nconst text = String(item.json.extractedText ?? '').replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: item.json.documentId,\n        uploadId: item.json.uploadId,\n        fileName: item.json.fileName,\n        mimeType: item.json.mimeType,\n        requestId: item.json.requestId,\n        ingestionRunId: item.json.ingestionRunId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
+        "jsCode": "function extractText(json) {\n  const candidates = [json.extractedText, json.data, json.text, json.content];\n  for (const candidate of candidates) {\n    if (typeof candidate === 'string' && candidate.trim()) {\n      return candidate;\n    }\n  }\n  return '';\n}\nconst [item] = items;\nconst source = $('Normalize Request').first().json;\nconst text = extractText(item.json).replace(/\\s+/g, ' ').trim();\nif (!text) {\n  throw new Error('no extracted text returned from PDF extraction');\n}\nconst chunkSize = 1200;\nconst overlap = 200;\nconst chunks = [];\nlet cursor = 0;\nlet index = 0;\nwhile (cursor < text.length) {\n  const end = Math.min(text.length, cursor + chunkSize);\n  const content = text.slice(cursor, end).trim();\n  if (content.length > 0) {\n    chunks.push({\n      json: {\n        documentId: source.documentId,\n        uploadId: source.uploadId,\n        fileName: source.fileName,\n        mimeType: source.mimeType,\n        requestId: source.requestId,\n        ingestionRunId: source.ingestionRunId,\n        chunkIndex: index,\n        content,\n        tokenCount: Math.ceil(content.length / 4),\n      },\n    });\n    index += 1;\n  }\n  if (end === text.length) {\n    break;\n  }\n  cursor = Math.max(end - overlap, cursor + 1);\n}\nreturn chunks;"
       }
     },
     {
@@ -100,16 +82,13 @@
       "name": "Create Embedding",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1420,
-        280
-      ],
+      "position": [1420, 280],
       "parameters": {
         "method": "POST",
-        "url": "https://api.openai.com/v1/embeddings",
+        "url": "={{ (() => { const baseUrl = String($env.OPENAI_API_URL || 'https://api.openai.com/v1').replace(/\\/$/, '').replace('://localhost', '://host.docker.internal').replace('://127.0.0.1', '://host.docker.internal'); return baseUrl.endsWith('/v1') ? `${baseUrl}/embeddings` : `${baseUrl}/api/embeddings`; })() }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"model\": $env.OPENAI_EMBEDDING_MODEL || \"text-embedding-3-small\", \"input\": $json.content}",
+        "jsonBody": "={{ (() => { const baseUrl = String($env.OPENAI_API_URL || 'https://api.openai.com/v1').replace(/\\/$/, ''); const model = $env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small'; return baseUrl.endsWith('/v1') ? { model, input: $json.content } : { model, prompt: $json.content }; })() }}",
         "options": {},
         "sendHeaders": true,
         "headerParametersUi": {
@@ -127,13 +106,10 @@
       "name": "Build Qdrant Point",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1660,
-        280
-      ],
+      "position": [1660, 280],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nconst seed = `${source.documentId}:${source.chunkIndex}`;\nconst digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));\nconst hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');\nconst pointId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${(((Number.parseInt(hash.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0'))}${hash.slice(18, 20)}-${hash.slice(20, 32)}`;\nreturn {\n  json: {\n    pointId,\n    documentId: source.documentId,\n    uploadId: source.uploadId,\n    fileName: source.fileName,\n    mimeType: source.mimeType,\n    requestId: source.requestId,\n    ingestionRunId: source.ingestionRunId,\n    chunkIndex: source.chunkIndex,\n    content: source.content,\n    tokenCount: source.tokenCount,\n    vector: embedding,\n  },\n};"
+        "jsCode": "function fnv1aHex(value, salt) {\n  let hash = (0x811c9dc5 ^ salt) >>> 0;\n  for (let index = 0; index < value.length; index += 1) {\n    hash ^= value.charCodeAt(index);\n    hash = Math.imul(hash, 0x01000193) >>> 0;\n  }\n  return hash.toString(16).padStart(8, '0');\n}\nconst embedding = $json.data?.[0]?.embedding ?? $json.embedding;\nif (!Array.isArray(embedding) || embedding.length === 0) {\n  throw new Error('embedding response did not include a vector');\n}\nconst source = $('Chunk Text').item.json;\nconst seed = `${source.documentId}:${source.chunkIndex}`;\nconst hash = [0, 1, 2, 3].map((salt) => fnv1aHex(seed, salt)).join('');\nconst pointId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${(((Number.parseInt(hash.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0'))}${hash.slice(18, 20)}-${hash.slice(20, 32)}`;\nreturn {\n  pointId,\n  documentId: source.documentId,\n  uploadId: source.uploadId,\n  fileName: source.fileName,\n  mimeType: source.mimeType,\n  requestId: source.requestId,\n  ingestionRunId: source.ingestionRunId,\n  chunkIndex: source.chunkIndex,\n  content: source.content,\n  tokenCount: source.tokenCount,\n  vector: embedding,\n};"
       }
     },
     {
@@ -141,16 +117,13 @@
       "name": "Upsert Into Qdrant",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1900,
-        280
-      ],
+      "position": [1900, 280],
       "parameters": {
         "method": "PUT",
         "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points?wait=true` }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"points\":[{\"id\":$json.pointId,\"vector\":$json.vector,\"payload\":{\"documentId\":$json.documentId,\"uploadId\":$json.uploadId,\"documentName\":$json.fileName,\"fileName\":$json.fileName,\"mimeType\":$json.mimeType,\"requestId\":$json.requestId,\"ingestionRunId\":$json.ingestionRunId,\"chunkIndex\":$json.chunkIndex,\"content\":$json.content,\"tokenCount\":$json.tokenCount}}]}",
+        "jsonBody": "={{ { points: [{ id: $json.pointId, vector: $json.vector, payload: { documentId: $json.documentId, uploadId: $json.uploadId, documentName: $json.fileName, fileName: $json.fileName, mimeType: $json.mimeType, requestId: $json.requestId, ingestionRunId: $json.ingestionRunId, chunkIndex: $json.chunkIndex, content: $json.content, tokenCount: $json.tokenCount } }] } }}",
         "options": {}
       }
     },
@@ -159,10 +132,7 @@
       "name": "Summarize Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        2140,
-        280
-      ],
+      "position": [2140, 280],
       "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "const executionId = String($execution.id ?? '').trim();\nif (!executionId) {\n  throw new Error('execution id unavailable for ingestion response');\n}\nconst workflowId = $workflow.id == null ? null : String($workflow.id);\nreturn [{ json: {\n  executionId,\n  workflowId,\n  status: 'running',\n  message: 'Document ingestion started.',\n} }];"
@@ -173,10 +143,7 @@
       "name": "Respond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [
-        2380,
-        280
-      ],
+      "position": [2380, 280],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ $json }}"
@@ -187,13 +154,10 @@
       "name": "Prepare Stale Point Cleanup",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        2140,
-        440
-      ],
+      "position": [2140, 440],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const source = $('Build Qdrant Point').first().json;\nreturn [{ json: {\n  documentId: source.documentId,\n  ingestionRunId: source.ingestionRunId,\n} }];"
+        "jsCode": "const source = $('Normalize Request').first().json;\nreturn [{ json: {\n  documentId: source.documentId,\n  ingestionRunId: source.ingestionRunId,\n} }];"
       }
     },
     {
@@ -201,17 +165,50 @@
       "name": "Delete Stale Qdrant Points",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        2380,
-        440
-      ],
+      "position": [2380, 440],
       "parameters": {
         "method": "POST",
         "url": "={{ `${$env.QDRANT_URL}/collections/${$env.QDRANT_COLLECTION}/points/delete?wait=true` }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"filter\":{\"must\":[{\"key\":\"documentId\",\"match\":{\"value\": $json.documentId}}],\"must_not\":[{\"key\":\"ingestionRunId\",\"match\":{\"value\": $json.ingestionRunId}}]}}",
+        "jsonBody": "={{ { filter: { must: [{ key: 'documentId', match: { value: $json.documentId } }], must_not: [{ key: 'ingestionRunId', match: { value: $json.ingestionRunId } }] } } }}",
         "options": {}
+      }
+    },
+    {
+      "id": "prepare-completion-callback",
+      "name": "Prepare Completion Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 440],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Normalize Request').first().json;\nconst chunks = $('Build Qdrant Point').all().map((item) => {\n  const json = item.json;\n  const tokenCount = Number(json.tokenCount);\n  return {\n    chunkIndex: Number(json.chunkIndex),\n    content: String(json.content ?? ''),\n    tokenCount: Number.isFinite(tokenCount) ? tokenCount : null,\n    pointId: String(json.pointId ?? ''),\n  };\n}).filter((chunk) => Number.isInteger(chunk.chunkIndex) && chunk.content && chunk.pointId).sort((left, right) => left.chunkIndex - right.chunkIndex);\nif (chunks.length === 0) {\n  throw new Error('completion callback requires at least one chunk');\n}\nconst executionId = String($execution.id ?? '').trim();\nreturn [{ json: {\n  documentId: String(source.documentId),\n  uploadId: String(source.uploadId),\n  externalExecutionId: executionId || null,\n  workflowId: $workflow.id == null ? null : String($workflow.id),\n  completedAt: new Date().toISOString(),\n  embeddingModel: $env.OPENAI_EMBEDDING_MODEL || null,\n  chunks,\n} }];"
+      }
+    },
+    {
+      "id": "complete-app-ingestion-callback",
+      "name": "Complete App Ingestion Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2860, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ `${String($env.LOCALRAG_APP_URL || 'http://nextjs:3000').replace(/\\/$/, '')}/api/ingestion/callback` }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {},
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-webhook-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
       }
     }
   ],
@@ -344,8 +341,28 @@
     },
     "Delete Stale Qdrant Points": {
       "main": [
-        []
+        [
+          {
+            "node": "Prepare Completion Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
+    },
+    "Prepare Completion Callback": {
+      "main": [
+        [
+          {
+            "node": "Complete App Ingestion Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete App Ingestion Callback": {
+      "main": [[]]
     }
   },
   "pinData": {},
