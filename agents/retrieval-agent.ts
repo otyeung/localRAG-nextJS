@@ -1,4 +1,5 @@
 import 'server-only';
+import '@/lib/openai/runtime';
 
 import { Agent } from '@openai/agents';
 

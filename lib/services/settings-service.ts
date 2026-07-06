@@ -3,6 +3,7 @@ import 'server-only';
 import type { PrismaClient } from '@prisma/client';
 
 import type { DbClient } from '@/lib/repositories/types';
+import { env } from '@/lib/config/env';
 import { prisma } from '@/lib/db/prisma';
 import { AuditRepository } from '@/lib/repositories/audit-repository';
 
@@ -16,7 +17,7 @@ export type UserSettingsUpdateInput = Partial<UserSettingsDto>;
 
 export const defaultUserSettings: UserSettingsDto = {
   theme: 'system',
-  model: 'gpt-4.1-mini',
+  model: env.openai.model,
   showReasoningMetadata: true,
 };
 
@@ -30,13 +31,18 @@ export type SettingsAuditContext = {
   userAgent?: string;
 };
 
-type StoredSettings = {
-  theme?: string | null;
-  model?: string | null;
-  showReasoningMetadata?: boolean | null;
-} | null | undefined;
+type StoredSettings =
+  | {
+      theme?: string | null;
+      model?: string | null;
+      showReasoningMetadata?: boolean | null;
+    }
+  | null
+  | undefined;
 
-function toThemePreference(theme: string | null | undefined): UserSettingsDto['theme'] {
+function toThemePreference(
+  theme: string | null | undefined,
+): UserSettingsDto['theme'] {
   if (theme === 'light' || theme === 'dark' || theme === 'system') {
     return theme;
   }
@@ -48,11 +54,15 @@ function toUserSettingsDto(settings: StoredSettings): UserSettingsDto {
   return {
     theme: toThemePreference(settings?.theme),
     model: settings?.model ?? defaultUserSettings.model,
-    showReasoningMetadata: settings?.showReasoningMetadata ?? defaultUserSettings.showReasoningMetadata,
+    showReasoningMetadata:
+      settings?.showReasoningMetadata ??
+      defaultUserSettings.showReasoningMetadata,
   };
 }
 
-function buildUpdateData(input: UserSettingsUpdateInput): UserSettingsUpdateInput {
+function buildUpdateData(
+  input: UserSettingsUpdateInput,
+): UserSettingsUpdateInput {
   const nextInput: UserSettingsUpdateInput = {};
 
   if (input.theme !== undefined) {
@@ -70,7 +80,10 @@ function buildUpdateData(input: UserSettingsUpdateInput): UserSettingsUpdateInpu
   return nextInput;
 }
 
-function buildCreateData(userId: string, input: UserSettingsUpdateInput): UserSettingsDto & { userId: string } {
+function buildCreateData(
+  userId: string,
+  input: UserSettingsUpdateInput,
+): UserSettingsDto & { userId: string } {
   return {
     userId,
     ...defaultUserSettings,
@@ -97,7 +110,10 @@ export class SettingsService {
     return toUserSettingsDto(settings);
   }
 
-  async updateForUser(userId: string, input: UserSettingsUpdateInput): Promise<UserSettingsDto> {
+  async updateForUser(
+    userId: string,
+    input: UserSettingsUpdateInput,
+  ): Promise<UserSettingsDto> {
     return this.upsertForUser(this.db, userId, input);
   }
 

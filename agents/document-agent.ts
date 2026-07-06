@@ -1,4 +1,5 @@
 import 'server-only';
+import '@/lib/openai/runtime';
 
 import { Agent } from '@openai/agents';
 
@@ -13,7 +14,12 @@ export const DocumentAgent = new Agent<AgentToolRuntimeContext>({
   name: 'DocumentAgent',
   instructions:
     'You specialize in document-grounded answers. Prefer retrieve_chunks for questions about uploaded content, summarize evidence clearly, and cite chunk documentName and chunkIndex inline.',
-  handoffDescription: 'Focused on document-grounded answers over uploaded files.',
+  handoffDescription:
+    'Focused on document-grounded answers over uploaded files.',
   model: env.openai.model,
-  tools: [createRetrieveChunksTool(), createListDocumentsTool(), createConversationHistoryTool()],
+  tools: [
+    createRetrieveChunksTool(),
+    createListDocumentsTool(),
+    createConversationHistoryTool(),
+  ],
 });

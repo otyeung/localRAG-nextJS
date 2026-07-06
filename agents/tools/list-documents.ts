@@ -7,12 +7,45 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db/prisma';
 import { DocumentService } from '@/lib/services/document-service';
 
-import { getAgentToolContext, type AgentToolRuntimeContext, withRecordedToolCall } from '@/agents/tools/shared';
+import {
+  getAgentToolContext,
+  type AgentToolRuntimeContext,
+  withRecordedToolCall,
+} from '@/agents/tools/shared';
+
+const documentStatuses = new Set<string>(Object.keys(DocumentStatus));
+
+function toOptionalTrimmed(value: unknown): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toDocumentStatus(
+  value: unknown,
+): keyof typeof DocumentStatus | undefined {
+  const normalized = toOptionalTrimmed(value);
+  return normalized && documentStatuses.has(normalized)
+    ? (normalized as keyof typeof DocumentStatus)
+    : undefined;
+}
+
+function toLimit(value: unknown, defaultValue: number, max: number): number {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : Number.parseInt(String(value ?? ''), 10);
+  return Number.isInteger(parsed) && parsed > 0
+    ? Math.min(parsed, max)
+    : defaultValue;
+}
 
 const listDocumentsInputSchema = z.object({
-  query: z.string().trim().min(1).optional(),
-  status: z.enum(Object.keys(DocumentStatus) as [keyof typeof DocumentStatus, ...Array<keyof typeof DocumentStatus>]).optional(),
-  limit: z.number().int().positive().max(50).default(10),
+  query: z.string().nullable().default(null),
+  status: z.string().nullable().default(null),
+  limit: z
+    .union([z.string(), z.number(), z.boolean()])
+    .nullable()
+    .default(null),
 });
 
 export function createListDocumentsTool(
@@ -26,7 +59,8 @@ export function createListDocumentsTool(
 
   return tool<typeof listDocumentsInputSchema, AgentToolRuntimeContext>({
     name: 'list_documents',
-    description: "List the current user's uploaded documents and their ready/ingesting status.",
+    description:
+      "List the current user's uploaded documents and their ready/ingesting status.",
     parameters: listDocumentsInputSchema,
     execute: async (input, runContext) => {
       const context = getAgentToolContext(runContext);
@@ -40,11 +74,14 @@ export function createListDocumentsTool(
           requestId: context.requestId,
         },
         execute: async () => {
+          const query = toOptionalTrimmed(input.query);
+          const status = toDocumentStatus(input.status);
+          const limit = toLimit(input.limit, 10, 50);
           const result = await documentService.listDocuments(context.userId, {
-            search: input.query,
-            status: input.status,
+            search: query,
+            status,
             page: 1,
-            pageSize: input.limit,
+            pageSize: limit,
             sort: 'updatedAt',
             order: 'desc',
           });

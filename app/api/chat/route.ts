@@ -12,11 +12,22 @@ import { rateLimit } from '@/lib/security/rate-limit';
 import { ChatService } from '@/lib/services/chat-service';
 
 const chatService = new ChatService();
+const optionalRequestString = z.preprocess((value) => {
+  if (value === null) {
+    return undefined;
+  }
+
+  if (typeof value === 'string' && value.trim().length === 0) {
+    return undefined;
+  }
+
+  return value;
+}, z.string().optional());
 const chatRequestSchema = z.object({
-  id: z.string().optional(),
-  conversationId: z.string().optional(),
+  id: optionalRequestString,
+  conversationId: optionalRequestString,
   messages: z.array(appUiMessageSchema),
-  activeAgentName: z.string().optional(),
+  activeAgentName: optionalRequestString,
 });
 
 export async function POST(request: Request): Promise<Response> {
@@ -30,11 +41,14 @@ export async function POST(request: Request): Promise<Response> {
       errorMessage: 'Too many chat requests.',
     });
     const user = await getCurrentUser(request);
-    const rateLimitResult = await rateLimit(`chat:post:${user.id}:${requestContext.ipAddress}`, {
-      namespace: 'chat-api',
-      limit: 20,
-      windowMs: 60_000,
-    });
+    const rateLimitResult = await rateLimit(
+      `chat:post:${user.id}:${requestContext.ipAddress}`,
+      {
+        namespace: 'chat-api',
+        limit: 20,
+        windowMs: 60_000,
+      },
+    );
 
     if (!rateLimitResult.allowed) {
       throw new AppError('RATE_LIMITED', 'Too many chat requests.', {
@@ -42,9 +56,16 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    const body = validateWithSchema(chatRequestSchema, await parseJsonBody(request), 'Invalid chat request payload.');
+    const body = validateWithSchema(
+      chatRequestSchema,
+      await parseJsonBody(request),
+      'Invalid chat request payload.',
+    );
     if (body.messages.some((message) => message.role === 'system')) {
-      throw new AppError('BAD_REQUEST', 'System messages must be defined server-side.');
+      throw new AppError(
+        'BAD_REQUEST',
+        'System messages must be defined server-side.',
+      );
     }
 
     return await chatService.streamChat({

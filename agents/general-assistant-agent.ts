@@ -1,4 +1,5 @@
 import 'server-only';
+import '@/lib/openai/runtime';
 
 import { Agent } from '@openai/agents';
 
@@ -15,7 +16,8 @@ export const GeneralAssistantAgent = new Agent<AgentToolRuntimeContext>({
   name: 'GeneralAssistantAgent',
   instructions:
     'You are an enterprise document assistant. Answer conversationally and concisely. When a question may depend on uploaded documents, call retrieve_chunks before answering. Cite retrieved chunks inline using the citation metadata returned by tools. Never mention n8n, Qdrant, internal workflow IDs, credentials, or hidden service details to the user.',
-  handoffDescription: 'General enterprise assistant for document and workflow questions.',
+  handoffDescription:
+    'General enterprise assistant for document and workflow questions.',
   model: env.openai.model,
   tools: [
     createRetrieveChunksTool(),

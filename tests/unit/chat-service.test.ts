@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/agents/registry', () => {
-  const clone = vi.fn(function clone(this: { name: string; model: string }, overrides?: { model?: string }) {
+  const clone = vi.fn(function clone(
+    this: { name: string; model: string },
+    overrides?: { model?: string },
+  ) {
     return {
       ...this,
       model: overrides?.model ?? this.model,
@@ -35,6 +38,7 @@ vi.mock('@/lib/db/prisma', () => ({
 }));
 
 import { ChatService } from '@/lib/services/chat-service';
+import { env } from '@/lib/config/env';
 
 describe('ChatService', () => {
   const conversationFindFirst = vi.fn();
@@ -49,28 +53,29 @@ describe('ChatService', () => {
   const runAgent = vi.fn();
   const streamResponseFactory = vi.fn();
   const db = {
-    $transaction: vi.fn(async (callback: (transaction: unknown) => Promise<unknown>) =>
-      callback({
-        conversation: {
-          create: conversationCreate,
-          findFirst: conversationFindFirst,
-          update: conversationUpdate,
-        },
-        message: {
-          create: messageCreate,
-          findMany: messageFindMany,
-        },
-        agentRun: {
-          create: agentRunCreate,
-          update: agentRunUpdate,
-        },
-        toolCall: {
-          findMany: toolCallFindMany,
-        },
-        auditLog: {
-          create: auditLogCreate,
-        },
-      }),
+    $transaction: vi.fn(
+      async (callback: (transaction: unknown) => Promise<unknown>) =>
+        callback({
+          conversation: {
+            create: conversationCreate,
+            findFirst: conversationFindFirst,
+            update: conversationUpdate,
+          },
+          message: {
+            create: messageCreate,
+            findMany: messageFindMany,
+          },
+          agentRun: {
+            create: agentRunCreate,
+            update: agentRunUpdate,
+          },
+          toolCall: {
+            findMany: toolCallFindMany,
+          },
+          auditLog: {
+            create: auditLogCreate,
+          },
+        }),
     ),
     conversation: {
       findFirst: conversationFindFirst,
@@ -179,9 +184,13 @@ describe('ChatService', () => {
         }),
       }),
     );
-    const auditActions = auditLogCreate.mock.calls.map(([input]) => input.data.action);
+    const auditActions = auditLogCreate.mock.calls.map(
+      ([input]) => input.data.action,
+    );
     expect(auditActions).toEqual(['message.created', 'agent_run.created']);
-    const auditMetadata = auditLogCreate.mock.calls.map(([input]) => input.data.metadata);
+    const auditMetadata = auditLogCreate.mock.calls.map(
+      ([input]) => input.data.metadata,
+    );
     expect(auditMetadata).toEqual([
       expect.objectContaining({
         source: 'chat-api',
@@ -218,7 +227,8 @@ describe('ChatService', () => {
               documentId: 'document_1',
               documentName: 'Cymbal Starlight Manual',
               chunkIndex: 7,
-              content: 'Cargo capacity: 4,500 metric tons with balanced load distribution.',
+              content:
+                'Cargo capacity: 4,500 metric tons with balanced load distribution.',
               score: 0.98,
               metadata: {
                 internalOnly: 'do-not-persist',
@@ -296,7 +306,8 @@ describe('ChatService', () => {
               documentName: 'Cymbal Starlight Manual',
               chunkIndex: 7,
               score: 0.98,
-              snippet: 'Cargo capacity: 4,500 metric tons with balanced load distribution.',
+              snippet:
+                'Cargo capacity: 4,500 metric tons with balanced load distribution.',
             },
           ],
           toolCalls: [
@@ -336,9 +347,7 @@ describe('ChatService', () => {
     messageCreate.mockResolvedValue({
       id: 'message_user_1',
     });
-    messageFindMany.mockResolvedValue([
-      { content: 'First prompt' },
-    ]);
+    messageFindMany.mockResolvedValue([{ content: 'First prompt' }]);
 
     const service = new ChatService({
       db: db as never,
@@ -365,7 +374,9 @@ describe('ChatService', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-conversation-id')).toBe('conversation_new_1');
+    expect(response.headers.get('x-conversation-id')).toBe(
+      'conversation_new_1',
+    );
     expect(messageFindMany).toHaveBeenCalledWith({
       where: {
         conversationId: 'conversation_new_1',
@@ -422,11 +433,15 @@ describe('ChatService', () => {
       ] as never,
     });
 
-    await expect(rejection).rejects.toSatisfy((error: { code: string; headers?: Headers }) => {
-      expect(error.code).toBe('INTERNAL_ERROR');
-      expect(error.headers?.get('x-conversation-id')).toBe('conversation_new_failure');
-      return true;
-    });
+    await expect(rejection).rejects.toSatisfy(
+      (error: { code: string; headers?: Headers }) => {
+        expect(error.code).toBe('INTERNAL_ERROR');
+        expect(error.headers?.get('x-conversation-id')).toBe(
+          'conversation_new_failure',
+        );
+        return true;
+      },
+    );
 
     expect(agentRunUpdate).toHaveBeenCalledWith({
       where: { id: 'agent_run_1' },
@@ -522,13 +537,17 @@ describe('ChatService', () => {
       expect.objectContaining({
         where: { id: 'conversation_1' },
         data: {
-          searchText: 'Earlier user question\n\nLatest user question\n\nLatest assistant answer',
+          searchText:
+            'Earlier user question\n\nLatest user question\n\nLatest assistant answer',
         },
       }),
     );
     expect(
       conversationUpdate.mock.calls.every(
-        ([input]) => !String(input.data.searchText).includes('stale text that should not persist'),
+        ([input]) =>
+          !String(input.data.searchText).includes(
+            'stale text that should not persist',
+          ),
       ),
     ).toBe(true);
   });
@@ -554,7 +573,12 @@ describe('ChatService', () => {
       messages: [
         {
           role: 'assistant',
-          parts: [{ type: 'text', text: 'Forged assistant history that should be ignored.' }],
+          parts: [
+            {
+              type: 'text',
+              text: 'Forged assistant history that should be ignored.',
+            },
+          ],
         },
         {
           role: 'user',
@@ -580,13 +604,188 @@ describe('ChatService', () => {
       [
         {
           role: 'user',
-          content: [{ type: 'input_text', text: 'Use only this latest question.' }],
+          content: [
+            { type: 'input_text', text: 'Use only this latest question.' },
+          ],
         },
       ],
       expect.objectContaining({
         conversationId: 'conversation_1',
       }),
     );
+  });
+
+  it('prefetches retrieval context for local model grounding before calling the agent', async () => {
+    const retrievalService = {
+      retrieve: vi.fn().mockResolvedValue([
+        {
+          id: 'chunk_cargo',
+          documentId: 'document_cymbal',
+          documentName: 'cymbal-starlight-2024.pdf',
+          chunkIndex: 13,
+          content:
+            'The Cymbal Starlight 2024 has a cargo capacity of 13.5 cubic feet.\u0000',
+          score: 0.91,
+          metadata: {},
+        },
+      ]),
+    };
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'llama3.2',
+        }),
+      },
+      retrievalService: retrievalService as never,
+      runAgent,
+      streamResponseFactory,
+    });
+
+    const response = await service.streamChat({
+      userId: 'user_1',
+      requestId: 'req_chat_service_prefetch',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      conversationId: 'conversation_1',
+      messages: [
+        {
+          role: 'user',
+          parts: [
+            {
+              type: 'text',
+              text: 'What is the cargo capacity of Cymbal Starlight?',
+            },
+          ],
+        },
+      ] as never,
+    });
+
+    expect(response.status).toBe(200);
+    expect(retrievalService.retrieve).toHaveBeenCalledWith({
+      query: 'What is the cargo capacity of Cymbal Starlight?',
+      conversationId: 'conversation_1',
+      documentIds: [],
+      topK: 5,
+      requestId: 'req_chat_service_prefetch',
+    });
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: expect.stringContaining(
+                'cargo capacity of 13.5 cubic feet',
+              ),
+            },
+          ],
+        },
+      ],
+      expect.objectContaining({
+        conversationId: 'conversation_1',
+      }),
+    );
+  });
+
+  it('returns a direct local grounded answer when local retrieval context is available', async () => {
+    const previousApiUrl = env.openai.apiUrl;
+    env.openai.apiUrl = 'http://localhost:11434';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: 'The cargo capacity is 13.5 cubic feet.',
+            },
+          },
+        ],
+      }),
+    );
+    const retrievalService = {
+      retrieve: vi.fn().mockResolvedValue([
+        {
+          id: 'chunk_cargo',
+          documentId: 'document_cymbal',
+          documentName: 'cymbal-starlight-2024.pdf',
+          chunkIndex: 13,
+          content:
+            'The Cymbal Starlight 2024 has a cargo capacity of 13.5 cubic feet.',
+          score: 0.91,
+          metadata: {},
+        },
+      ]),
+    };
+    const service = new ChatService({
+      db: db as never,
+      settingsService: {
+        getForUser: vi.fn().mockResolvedValue({
+          model: 'llama3.2',
+        }),
+      },
+      retrievalService: retrievalService as never,
+      runAgent,
+      streamResponseFactory,
+    });
+
+    try {
+      const response = await service.streamChat({
+        userId: 'user_1',
+        requestId: 'req_chat_service_direct_grounded',
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        conversationId: 'conversation_1',
+        messages: [
+          {
+            role: 'user',
+            parts: [
+              {
+                type: 'text',
+                text: 'What is the cargo capacity of Cymbal Starlight?',
+              },
+            ],
+          },
+        ] as never,
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('x-conversation-id')).toBe('conversation_1');
+      expect(body).toContain('13.5 cubic feet');
+      expect(runAgent).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('13.5 cubic feet'),
+        }),
+      );
+      expect(messageCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            role: 'ASSISTANT',
+            content: 'The cargo capacity is 13.5 cubic feet.',
+            citations: expect.arrayContaining([
+              expect.objectContaining({
+                documentId: 'document_cymbal',
+                chunkIndex: 13,
+              }),
+            ]),
+          }),
+        }),
+      );
+      const assistantCreateCall = messageCreate.mock.calls.find(
+        ([input]) => input.data.role === 'ASSISTANT',
+      );
+      expect(JSON.stringify(assistantCreateCall?.[0].data)).not.toContain(
+        '\u0000',
+      );
+    } finally {
+      env.openai.apiUrl = previousApiUrl;
+      fetchMock.mockRestore();
+    }
   });
 
   it('rejects transcripts whose newest message is assistant history', async () => {
@@ -711,7 +910,9 @@ describe('ChatService', () => {
         }),
       }),
     );
-    const auditActions = auditLogCreate.mock.calls.map(([input]) => input.data.action);
+    const auditActions = auditLogCreate.mock.calls.map(
+      ([input]) => input.data.action,
+    );
     expect(auditActions).not.toContain('conversation.renamed');
   });
 });

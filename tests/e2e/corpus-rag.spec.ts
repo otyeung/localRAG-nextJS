@@ -1,4 +1,10 @@
-import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+} from '@playwright/test';
 
 import { corpusQuestions } from '@/tests/fixtures/corpus-questions';
 import { hasUsableLiveOpenAiKey } from '@/tests/support/live-openai-key';
@@ -53,10 +59,16 @@ type PersistedAssistantExpectation = AssistantMessageSnapshot & {
   requiredFragment: string;
 };
 
-async function captureAssistantMessageSnapshot(message: Locator): Promise<AssistantMessageSnapshot> {
-  const responseText = (await message.getByTestId('message-content').innerText()).trim();
+async function captureAssistantMessageSnapshot(
+  message: Locator,
+): Promise<AssistantMessageSnapshot> {
+  const responseText = (
+    await message.getByTestId('message-content').innerText()
+  ).trim();
   const responseFragment = responseText.split(/\s+/).slice(0, 12).join(' ');
-  const citationText = (await message.getByTestId('citation-item').first().innerText()).trim();
+  const citationText = (
+    await message.getByTestId('citation-item').first().innerText()
+  ).trim();
 
   return {
     responseText,
@@ -71,25 +83,41 @@ async function expectPersistedAssistantMessage(
   requiredFragment: string,
   citationText: string,
 ) {
-  const assistantMessage = page.getByTestId('assistant-message').filter({
-    has: page.getByTestId('message-content').filter({ hasText: snapshot.responseFragment }),
-  }).last();
+  const assistantMessage = page
+    .getByTestId('assistant-message')
+    .filter({
+      has: page
+        .getByTestId('message-content')
+        .filter({ hasText: snapshot.responseFragment }),
+    })
+    .last();
 
   await expect(assistantMessage).toBeVisible({ timeout: 120_000 });
-  await expect(assistantMessage.getByTestId('message-content')).toContainText(requiredFragment, { timeout: 120_000 });
-  await expect(assistantMessage.getByTestId('message-content')).toContainText(snapshot.responseText, { timeout: 120_000 });
-  await expect(assistantMessage.getByTestId('message-citations')).toContainText(citationText, { timeout: 120_000 });
+  await expect(assistantMessage.getByTestId('message-content')).toContainText(
+    requiredFragment,
+    { timeout: 120_000 },
+  );
+  await expect(assistantMessage.getByTestId('message-content')).toContainText(
+    snapshot.responseText,
+    { timeout: 120_000 },
+  );
+  await expect(assistantMessage.getByTestId('message-citations')).toContainText(
+    citationText,
+    { timeout: 120_000 },
+  );
 }
 
 async function installSeedCorpusAnonymousCookie(page: Page) {
   process.env.OPENAI_API_KEY ??= 'playwright-openai-placeholder';
-  process.env.DATABASE_URL ??= 'postgresql://localhost:5432/localrag_nextjs?schema=public';
+  process.env.DATABASE_URL ??=
+    'postgresql://localhost:5432/localrag_nextjs?schema=app';
   process.env.N8N_BASE_URL ??= 'http://127.0.0.1:5678';
   process.env.N8N_WEBHOOK_SECRET ??= 'playwright-webhook-secret';
   process.env.QDRANT_URL ??= 'http://127.0.0.1:6333';
   process.env.ANONYMOUS_COOKIE_SECRET ??= 'playwright-anonymous-cookie-secret';
 
-  const { getSeedCorpusAnonymousCookie } = await import('@/lib/testing/seed-corpus-user');
+  const { getSeedCorpusAnonymousCookie } =
+    await import('@/lib/testing/seed-corpus-user');
   const cookie = getSeedCorpusAnonymousCookie();
   await page.context().addCookies([
     {
@@ -120,8 +148,18 @@ async function mockShellApis(
       version: '0.1.0',
       uptimeSeconds: 120,
       checks: [
-        { name: 'app', status: 'healthy', message: 'Application healthy.', latencyMs: 2 },
-        { name: 'database', status: 'healthy', message: 'Database healthy.', latencyMs: 4 },
+        {
+          name: 'app',
+          status: 'healthy',
+          message: 'Application healthy.',
+          latencyMs: 2,
+        },
+        {
+          name: 'database',
+          status: 'healthy',
+          message: 'Database healthy.',
+          latencyMs: 4,
+        },
       ],
     }),
   );
@@ -135,32 +173,31 @@ async function mockShellApis(
     }),
   );
 
-  await page.route('**/api/messages**', (route) =>
-    {
-      const url = new URL(route.request().url());
-      const conversationId = url.searchParams.get('conversationId');
-      const expectedConversationId = getExpectedMessagesConversationId?.() ?? null;
-      onMessagesRequest?.(conversationId);
+  await page.route('**/api/messages**', (route) => {
+    const url = new URL(route.request().url());
+    const conversationId = url.searchParams.get('conversationId');
+    const expectedConversationId =
+      getExpectedMessagesConversationId?.() ?? null;
+    onMessagesRequest?.(conversationId);
 
-      if (expectedConversationId && conversationId !== expectedConversationId) {
-        return json(route, {
-          items: [],
-          total: 0,
-          page: 1,
-          pageSize: 100,
-          order: 'asc',
-        });
-      }
-
+    if (expectedConversationId && conversationId !== expectedConversationId) {
       return json(route, {
-        items: getMessages(),
-        total: getMessages().length,
+        items: [],
+        total: 0,
         page: 1,
         pageSize: 100,
         order: 'asc',
       });
-    },
-  );
+    }
+
+    return json(route, {
+      items: getMessages(),
+      total: getMessages().length,
+      page: 1,
+      pageSize: 100,
+      order: 'asc',
+    });
+  });
 
   await page.route('**/api/documents**', (route) =>
     json(route, {
@@ -218,85 +255,94 @@ async function installMockChatTransport(page: Page) {
     },
   ]);
 
-  await page.addInitScript(({ responseBody }) => {
-    const originalFetch = window.fetch.bind(window);
-    const encoder = new TextEncoder();
-    const state = {
-      totalRequests: 0,
-      abortedRequests: 0,
-      completedRequests: 0,
-    };
+  await page.addInitScript(
+    ({ responseBody }) => {
+      const originalFetch = window.fetch.bind(window);
+      const encoder = new TextEncoder();
+      const state = {
+        totalRequests: 0,
+        abortedRequests: 0,
+        completedRequests: 0,
+      };
 
-    Object.assign(window, {
-      __chatMockState: state,
-    });
+      Object.assign(window, {
+        __chatMockState: state,
+      });
 
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : null;
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : request?.url ?? String(input);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : null;
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (request?.url ?? String(input));
 
-      if (!url.includes('/api/chat')) {
-        return originalFetch(input, init);
-      }
+        if (!url.includes('/api/chat')) {
+          return originalFetch(input, init);
+        }
 
-      state.totalRequests += 1;
-      const signal = init?.signal ?? request?.signal;
+        state.totalRequests += 1;
+        const signal = init?.signal ?? request?.signal;
 
-      if (state.totalRequests === 1) {
-        return new Promise<Response>((resolve, reject) => {
-          const onAbort = () => {
+        if (state.totalRequests === 1) {
+          return new Promise<Response>((resolve, reject) => {
+            const onAbort = () => {
+              state.abortedRequests += 1;
+              reject(
+                new DOMException('The operation was aborted.', 'AbortError'),
+              );
+            };
+
+            if (signal?.aborted) {
+              onAbort();
+              return;
+            }
+
+            signal?.addEventListener('abort', onAbort, { once: true });
+            void resolve;
+          });
+        }
+
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(responseBody));
+            controller.close();
+            state.completedRequests += 1;
+          },
+          cancel() {
             state.abortedRequests += 1;
-            reject(new DOMException('The operation was aborted.', 'AbortError'));
-          };
-
-          if (signal?.aborted) {
-            onAbort();
-            return;
-          }
-
-          signal?.addEventListener('abort', onAbort, { once: true });
-          void resolve;
+          },
         });
-      }
 
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(responseBody));
-          controller.close();
-          state.completedRequests += 1;
-        },
-        cancel() {
-          state.abortedRequests += 1;
-        },
-      });
-
-      return new Response(stream, {
-        status: 200,
-        headers: {
-          'content-type': 'text/event-stream',
-          'cache-control': 'no-cache',
-          'x-vercel-ai-ui-message-stream': 'v1',
-          'x-conversation-id': 'conversation_retry_1',
-        },
-      });
-    };
-  }, { responseBody: finalResponseBody });
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+            'x-vercel-ai-ui-message-stream': 'v1',
+            'x-conversation-id': 'conversation_retry_1',
+          },
+        });
+      };
+    },
+    { responseBody: finalResponseBody },
+  );
 }
 
 async function findSeededDocumentCard(page: Page, fileName: string) {
   const searchInput = page.getByPlaceholder('Search documents');
   await searchInput.fill(fileName);
-  const documentCard = page.getByRole('article', { name: `Document ${fileName}` });
+  const documentCard = page.getByRole('article', {
+    name: `Document ${fileName}`,
+  });
   await expect(documentCard).toBeVisible({ timeout: 120_000 });
   return documentCard;
 }
 
-test('stops a pending generation and retries the latest response with grounded output', async ({ page }) => {
+test('stops a pending generation and retries the latest response with grounded output', async ({
+  page,
+}) => {
   let persistedMessages: PersistedMessage[] = [];
   let persistedConversations: PersistedConversation[] = [];
   let expectedMessagesConversationId: string | null = null;
@@ -315,16 +361,20 @@ test('stops a pending generation and retries the latest response with grounded o
   await installMockChatTransport(page);
   await page.goto('/');
 
-  await page.getByRole('textbox', { name: 'Message input' }).fill('What is the cargo capacity of Cymbal Starlight?');
+  await page
+    .getByRole('textbox', { name: 'Message input' })
+    .fill('What is the cargo capacity of Cymbal Starlight?');
   await page.getByRole('button', { name: 'Send message' }).click();
 
   await expect(page.getByTestId('stop-generation')).toBeEnabled();
   await page.getByTestId('stop-generation').click();
 
   await page.waitForFunction(() => {
-    const state = (window as typeof window & {
-      __chatMockState?: { abortedRequests: number };
-    }).__chatMockState;
+    const state = (
+      window as typeof window & {
+        __chatMockState?: { abortedRequests: number };
+      }
+    ).__chatMockState;
 
     return state?.abortedRequests === 1;
   });
@@ -369,7 +419,8 @@ test('stops a pending generation and retries the latest response with grounded o
       createdAt: '2026-07-06T00:00:00.000Z',
       updatedAt: '2026-07-06T00:00:05.000Z',
       messageCount: persistedMessages.length,
-      lastMessagePreview: 'Retry completed with a grounded answer about cargo capacity.',
+      lastMessagePreview:
+        'Retry completed with a grounded answer about cargo capacity.',
       activeAgentName: 'DocumentAgent',
     },
   ];
@@ -379,21 +430,36 @@ test('stops a pending generation and retries the latest response with grounded o
 
   const assistantMessage = page.getByTestId('assistant-message').last();
   await expect(assistantMessage).toBeVisible();
-  await expect(assistantMessage.getByTestId('message-citations')).toContainText('cymbal-starlight-2024.pdf');
+  await expect(assistantMessage.getByTestId('message-citations')).toContainText(
+    'cymbal-starlight-2024.pdf',
+  );
   await page.waitForFunction(() => {
-    const state = (window as typeof window & {
-      __chatMockState?: { totalRequests: number; abortedRequests: number; completedRequests: number };
-    }).__chatMockState;
+    const state = (
+      window as typeof window & {
+        __chatMockState?: {
+          totalRequests: number;
+          abortedRequests: number;
+          completedRequests: number;
+        };
+      }
+    ).__chatMockState;
 
-    return state?.totalRequests === 2 && state.abortedRequests === 1 && state.completedRequests === 1;
+    return (
+      state?.totalRequests === 2 &&
+      state.abortedRequests === 1 &&
+      state.completedRequests === 1
+    );
   });
 
-  const persistedAssistant = await captureAssistantMessageSnapshot(assistantMessage);
+  const persistedAssistant =
+    await captureAssistantMessageSnapshot(assistantMessage);
 
   const messageRequestCountBeforeReload = observedMessageConversationIds.length;
   await page.reload();
   await expect
-    .poll(() => observedMessageConversationIds.slice(messageRequestCountBeforeReload))
+    .poll(() =>
+      observedMessageConversationIds.slice(messageRequestCountBeforeReload),
+    )
     .toContain(expectedMessagesConversationId!);
 
   await expectPersistedAssistantMessage(
@@ -404,8 +470,13 @@ test('stops a pending generation and retries the latest response with grounded o
   );
 });
 
-test('answers seeded corpus questions with citations and survives reload', async ({ page }) => {
-  test.skip(!liveCorpusEnabled || !liveOpenAiConfigured, 'Set LOCALRAG_LIVE_CORPUS_TESTS=1 with a live OPENAI_API_KEY to run corpus RAG E2E validation.');
+test('answers seeded corpus questions with citations and survives reload', async ({
+  page,
+}) => {
+  test.skip(
+    !liveCorpusEnabled || !liveOpenAiConfigured,
+    'Set LOCALRAG_LIVE_CORPUS_TESTS=1 with a live OPENAI_API_KEY to run corpus RAG E2E validation.',
+  );
   test.slow();
 
   await installSeedCorpusAnonymousCookie(page);
@@ -423,85 +494,148 @@ test('answers seeded corpus questions with citations and survives reload', async
     };
   };
   const checkStatuses = new Map(
-    (healthPayload.data?.checks ?? []).map((check) => [check.name ?? '', check.status ?? 'unknown']),
+    (healthPayload.data?.checks ?? []).map((check) => [
+      check.name ?? '',
+      check.status ?? 'unknown',
+    ]),
   );
-  const unavailableDependencies = ['database', 'n8n', 'qdrant', 'openai'].filter(
-    (dependency) => checkStatuses.get(dependency) !== 'healthy',
-  );
+  const unavailableDependencies = [
+    'database',
+    'n8n',
+    'qdrant',
+    'openai',
+  ].filter((dependency) => checkStatuses.get(dependency) !== 'healthy');
   if (unavailableDependencies.length > 0) {
-    test.skip(true, `Required live dependencies are unavailable: ${unavailableDependencies.join(', ')}.`);
+    test.skip(
+      true,
+      `Required live dependencies are unavailable: ${unavailableDependencies.join(', ')}.`,
+    );
   }
 
-  const documentsResponse = await page.request.get('/api/documents?page=1&pageSize=100');
+  const documentsResponse = await page.request.get(
+    '/api/documents?page=1&pageSize=100',
+  );
   if (!documentsResponse.ok()) {
-    test.skip(true, 'Live document APIs are unavailable for corpus validation.');
+    test.skip(
+      true,
+      'Live document APIs are unavailable for corpus validation.',
+    );
   }
 
   const documentsPayload = (await documentsResponse.json()) as {
     data?: { items?: Array<{ originalFilename?: string }> };
   };
-  const seededFiles = new Set((documentsPayload.data?.items ?? []).map((document) => document.originalFilename).filter(Boolean));
-  const missingFiles = corpusQuestions.filter((corpusQuestion) => !seededFiles.has(corpusQuestion.fileName));
+  const seededFiles = new Set(
+    (documentsPayload.data?.items ?? [])
+      .map((document) => document.originalFilename)
+      .filter(Boolean),
+  );
+  const missingFiles = corpusQuestions.filter(
+    (corpusQuestion) => !seededFiles.has(corpusQuestion.fileName),
+  );
   if (missingFiles.length > 0) {
-    test.skip(true, `Seeded corpus files are missing: ${missingFiles.map((file) => file.fileName).join(', ')}.`);
+    test.skip(
+      true,
+      `Seeded corpus files are missing: ${missingFiles.map((file) => file.fileName).join(', ')}.`,
+    );
   }
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Knowledge Base' }).click();
 
   for (const corpusQuestion of corpusQuestions) {
-    const documentCard = await findSeededDocumentCard(page, corpusQuestion.fileName);
-    await expect(documentCard.getByText(corpusQuestion.fileName)).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText('READY')).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText('Embedding status')).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText('Indexed')).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText('Chunk count')).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText(/\d+ chunks?/)).toBeVisible({ timeout: 120_000 });
-    await expect(documentCard.getByText('Workflow status')).toBeVisible({ timeout: 120_000 });
+    const documentCard = await findSeededDocumentCard(
+      page,
+      corpusQuestion.fileName,
+    );
+    await expect(documentCard.getByText(corpusQuestion.fileName)).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText('READY')).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText('Embedding status')).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText('Indexed')).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText('Chunk count')).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText(/\d+ chunks?/)).toBeVisible({
+      timeout: 120_000,
+    });
+    await expect(documentCard.getByText('Workflow status')).toBeVisible({
+      timeout: 120_000,
+    });
     await expect(
-      documentCard.getByText(/SUCCESS|RUNNING|WAITING|QUEUED|Workflow pending|Workflow unavailable|Checking workflow/i),
+      documentCard.getByText(
+        /SUCCESS|RUNNING|WAITING|QUEUED|Workflow pending|Workflow unavailable|Checking workflow/i,
+      ),
     ).toBeVisible({ timeout: 120_000 });
   }
 
   await page.getByRole('button', { name: 'New Chat' }).click();
-  await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible();
+  await expect(
+    page.getByRole('textbox', { name: 'Message input' }),
+  ).toBeVisible();
 
   const persistedAssistants: PersistedAssistantExpectation[] = [];
 
   for (const corpusQuestion of corpusQuestions) {
-    const assistantMessageCountBefore = await page.getByTestId('assistant-message').count();
+    const assistantMessageCountBefore = await page
+      .getByTestId('assistant-message')
+      .count();
     const requestPromise = page.waitForResponse(
-      (response) => response.url().includes('/api/chat') && response.request().method() === 'POST',
+      (response) =>
+        response.url().includes('/api/chat') &&
+        response.request().method() === 'POST',
       { timeout: 120_000 },
     );
 
-    await page.getByRole('textbox', { name: 'Message input' }).fill(corpusQuestion.question);
+    await page
+      .getByRole('textbox', { name: 'Message input' })
+      .fill(corpusQuestion.question);
     await page.getByRole('button', { name: 'Send message' }).click();
 
     await requestPromise;
-    await expect(page.getByText('Streaming answer')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText('Ready')).toBeVisible({ timeout: 180_000 });
-    await expect(page.getByRole('button', { name: 'Stop generation' })).toBeDisabled();
-    await expect(page.getByTestId('assistant-message')).toHaveCount(assistantMessageCountBefore + 1, {
-      timeout: 120_000,
+    await expect(page.getByText('Streaming answer')).toBeVisible({
+      timeout: 30_000,
     });
+    await expect(page.getByText('Ready')).toBeVisible({ timeout: 180_000 });
+    await expect(
+      page.getByRole('button', { name: 'Stop generation' }),
+    ).toBeDisabled();
+    await expect(page.getByTestId('assistant-message')).toHaveCount(
+      assistantMessageCountBefore + 1,
+      {
+        timeout: 120_000,
+      },
+    );
 
     const latestAssistantMessage = page.getByTestId('assistant-message').last();
-    const latestAssistantContent = latestAssistantMessage.getByTestId('message-content');
+    const latestAssistantContent =
+      latestAssistantMessage.getByTestId('message-content');
     await expect(latestAssistantMessage).toBeVisible({ timeout: 120_000 });
 
     for (const fragment of corpusQuestion.requiredAnswerFragments) {
-      await expect(latestAssistantContent).toContainText(fragment, { timeout: 120_000 });
+      await expect(latestAssistantContent).toContainText(fragment, {
+        timeout: 120_000,
+      });
     }
 
-    await expect(latestAssistantMessage.getByTestId('message-citations')).toContainText(corpusQuestion.fileName, {
+    await expect(
+      latestAssistantMessage.getByTestId('message-citations'),
+    ).toContainText(corpusQuestion.fileName, {
       timeout: 120_000,
     });
 
     persistedAssistants.push({
       ...(await captureAssistantMessageSnapshot(latestAssistantMessage)),
       fileName: corpusQuestion.fileName,
-      requiredFragment: corpusQuestion.requiredAnswerFragments[0] ?? corpusQuestion.fileName,
+      requiredFragment:
+        corpusQuestion.requiredAnswerFragments[0] ?? corpusQuestion.fileName,
     });
   }
 

@@ -16,6 +16,7 @@ vi.mock('@/lib/logger/logger', () => ({
 
 import { createRetrieveChunksTool } from '@/agents/tools/retrieve-chunks';
 import { createSearchConversationTool } from '@/agents/tools/search-conversation';
+import { createListDocumentsTool } from '@/agents/tools/list-documents';
 
 describe('agent tools', () => {
   const toolCallCreate = vi.fn();
@@ -26,6 +27,7 @@ describe('agent tools', () => {
   };
   const conversationFindFirst = vi.fn();
   const messageFindMany = vi.fn();
+  const listDocuments = vi.fn();
 
   beforeEach(() => {
     toolCallCreate.mockReset();
@@ -34,6 +36,7 @@ describe('agent tools', () => {
     retrievalService.retrieve.mockReset();
     conversationFindFirst.mockReset();
     messageFindMany.mockReset();
+    listDocuments.mockReset();
 
     toolCallCreate.mockResolvedValue({ id: 'tool_call_1' });
     toolCallUpdate.mockResolvedValue(undefined);
@@ -132,6 +135,73 @@ describe('agent tools', () => {
           durationMs: expect.any(Number),
         }),
       }),
+    });
+  });
+
+  it('coerces empty optional strings from local models when listing documents', async () => {
+    listDocuments.mockResolvedValue({
+      items: [
+        {
+          id: 'document_1',
+          title: 'Cymbal Starlight',
+          status: 'READY',
+          originalFilename: 'cymbal-starlight-2024.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: 336748,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+    });
+    const tool = createListDocumentsTool({
+      db: {
+        toolCall: {
+          create: toolCallCreate,
+          update: toolCallUpdate,
+        },
+      } as never,
+      documentService: {
+        listDocuments,
+      },
+    });
+
+    const result = await tool.invoke(
+      new RunContext({
+        userId: 'user_1',
+        conversationId: 'conversation_1',
+        agentRunId: 'run_1',
+        requestId: 'req_1',
+      }),
+      JSON.stringify({
+        query: 'Cymbal Starlight cargo capacity',
+        status: null,
+        limit: false,
+      }),
+    );
+
+    expect(result).toEqual({
+      documents: [
+        {
+          id: 'document_1',
+          title: 'Cymbal Starlight',
+          status: 'READY',
+          originalFilename: 'cymbal-starlight-2024.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: 336748,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+    });
+    expect(listDocuments).toHaveBeenCalledWith('user_1', {
+      search: 'Cymbal Starlight cargo capacity',
+      status: undefined,
+      page: 1,
+      pageSize: 10,
+      sort: 'updatedAt',
+      order: 'desc',
     });
   });
 
