@@ -45,12 +45,141 @@ At runtime the browser communicates only with Next.js routes under `app/api/*`. 
 
 For ingestion and retrieval, Next.js calls the typed service layer in `lib/n8n/*`, which uses internal-only Docker networking and webhook-secret validation to reach the committed n8n workflows. Ingestion completion flows back through `POST /api/ingestion/callback`, where Next.js validates the same webhook secret, persists chunks/embedding metadata, and marks uploads, documents, and workflow executions complete. `X-N8N-API-KEY` is used only for optional n8n REST API operations such as workflow listing/polling when an administrator provisions a key. Qdrant stores vector payloads; PostgreSQL remains the system of record for conversations, messages, documents, chunks, embeddings, uploads, workflow executions, agent runs, tool calls, audit logs, and settings.
 
+```mermaid
+graph TD
+    User[Browser User] -->|HTTPS localhost:3000| Next[Next.js App Router and API]
+    Next -->|Render shell and stream chat| UI[React Chat UI]
+    Next -->|Prisma app schema| PG[(PostgreSQL)]
+    Next -->|Rate limit state| Redis[(Redis)]
+    Next -->|Webhook secret calls| N8N[n8n Workflow Runtime]
+    N8N -->|Read uploaded files| Data[(app_data volume)]
+    N8N -->|Embed chunks and queries| Model[OpenAI-compatible Runtime]
+    N8N -->|Upsert and search vectors| Qdrant[(Qdrant Collection)]
+    N8N -->|POST /api/ingestion/callback| Next
+    Next -->|Persist chunks, embeddings, workflow state| PG
+    Next -->|Fleet and app health| Health[/api/health and /api/health/fleet]
+    QInit[qdrant-init Sidecar] -->|Ensure collection| Qdrant
+    Compose[Docker Compose Network] -.-> Next
+    Compose -.-> PG
+    Compose -.-> Redis
+    Compose -.-> N8N
+    Compose -.-> Qdrant
+
+    classDef user fill:#e7f5ff,stroke:#1971c2,color:#0b3558
+    classDef app fill:#e5dbff,stroke:#5f3dc4,color:#2b1b68
+    classDef data fill:#fff4e6,stroke:#e67700,color:#633000
+    classDef workflow fill:#c5f6fa,stroke:#0c8599,color:#053b43
+    classDef ai fill:#f3d9fa,stroke:#862e9c,color:#3b0f47
+    classDef infra fill:#f8f9fa,stroke:#868e96,color:#343a40
+
+    class User user
+    class Next,UI app
+    class PG,Redis,Qdrant,Data data
+    class N8N,QInit workflow
+    class Model ai
+    class Health,Compose infra
+```
+
 Key product surfaces in this slice:
 
 - ChatGPT-style shell with sidebar, chat workspace, knowledge base, settings, and system status
 - Streaming chat backed by `GeneralAssistantAgent`, `DocumentAgent`, and `RetrievalAgent`
 - Upload, indexing, reindex, search, and workflow-status visibility for the knowledge base
 - Health reporting for app, database, Redis, n8n, Qdrant, Qdrant bootstrap, and OpenAI-compatible runtime configuration
+
+## Call flows
+
+These diagrams show the main runtime paths through the local RAG stack. The browser always calls Next.js first; n8n, Qdrant, PostgreSQL, Redis, and OpenAI-compatible runtimes remain behind server-to-server boundaries.
+
+### Chat and grounded retrieval
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as React Chat UI
+    participant API as Next.js /api/chat
+    participant Agent as OpenAI Agents SDK
+    participant Tool as retrieve_chunks tool
+    participant N8N as n8n retrieval workflow
+    participant Embed as OpenAI-compatible embeddings
+    participant Qdrant as Qdrant vectors
+    participant DB as PostgreSQL app schema
+    participant Model as Chat model
+
+    User->>UI: Ask a grounded question
+    UI->>API: POST /api/chat with conversationId
+    API->>DB: Persist user message and agent run
+    API->>Agent: Start selected assistant agent
+    Agent->>Tool: Request relevant chunks
+    Tool->>N8N: Webhook retrieval with query and document filters
+    N8N->>Embed: Generate query embedding
+    N8N->>Qdrant: Search top matching chunk payloads
+    Qdrant-->>N8N: Return scored chunks
+    N8N-->>Tool: Return normalized retrieved chunks
+    Tool-->>Agent: Provide grounded context
+    Agent->>Model: Generate answer from retrieved context
+    API->>DB: Persist assistant message, citations, tool calls, audit metadata
+    API-->>UI: Stream answer and citation parts
+```
+
+### Upload, ingestion, and completion callback
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Upload and Document Library
+    participant Upload as Next.js /api/upload
+    participant Store as app_data upload volume
+    participant DB as PostgreSQL app schema
+    participant N8N as n8n ingestion workflow
+    participant Embed as OpenAI-compatible embeddings
+    participant Qdrant as Qdrant vectors
+    participant Callback as Next.js /api/ingestion/callback
+
+    User->>UI: Select PDF or supported file
+    UI->>Upload: Multipart POST /api/upload
+    Upload->>Upload: Validate extension, MIME type, size, CSRF, rate limit
+    Upload->>Store: Write file bytes to shared volume
+    Upload->>N8N: Start ingestion webhook with document metadata
+    Upload->>DB: Create upload, document, and workflow records
+    N8N->>Store: Read uploaded file
+    N8N->>N8N: Extract text and split chunks
+    N8N->>Embed: Generate chunk embeddings
+    N8N->>Qdrant: Upsert points with document payload metadata
+    N8N->>Qdrant: Delete stale points for previous ingestion runs
+    N8N->>Callback: POST completion payload with chunks and point IDs
+    Callback->>Callback: Validate webhook secret and payload
+    Callback->>DB: Persist chunks and embeddings
+    Callback->>DB: Mark upload COMPLETED, document READY, workflow SUCCESS
+    UI->>DB: Reload document library through Next.js APIs
+```
+
+### Docker fleet health
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as System Status Panel
+    participant Fleet as Next.js /api/health/fleet
+    participant DB as PostgreSQL
+    participant Redis as Redis
+    participant Qdrant as Qdrant
+    participant N8N as n8n healthz
+    participant Model as OpenAI-compatible config
+
+    User->>UI: Open command center
+    UI->>Fleet: GET /api/health/fleet
+    Fleet->>Fleet: Check Next.js runtime uptime
+    Fleet->>DB: SELECT 1 and user table count
+    Fleet->>Redis: TCP health check
+    Fleet->>Qdrant: Verify collection availability
+    Fleet->>N8N: GET /healthz runtime check
+    Fleet->>Model: Validate model configuration
+    Fleet-->>UI: Return healthy, degraded, or unhealthy service snapshots
+```
 
 ## Local Development
 
