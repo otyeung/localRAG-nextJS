@@ -253,15 +253,18 @@ export function ChatView({
   };
 
   return (
-    <section className="glass-panel flex h-full min-h-[70vh] flex-col overflow-hidden">
-      <header className="border-b border-[color:var(--border-soft)] px-6 py-5">
+    <section
+      data-testid="chat-shell"
+      className="glass-panel flex h-[calc(100svh-1rem)] max-h-[calc(100svh-1rem)] flex-col overflow-hidden xl:h-[calc(100vh-9rem)] xl:max-h-[calc(100vh-9rem)]"
+    >
+      <header className="shrink-0 border-b border-[color:var(--border-soft)] px-4 py-4 sm:px-6 sm:py-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-[0.72rem] uppercase tracking-[0.22em] text-[color:var(--text-dim)]">
               Private document intelligence
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h1 className="font-display text-3xl text-[color:var(--text-strong)]">Evidence-grounded chat</h1>
+              <h1 className="font-display text-2xl text-[color:var(--text-strong)] sm:text-3xl">Evidence-grounded chat</h1>
               <StatusBadge
                 label={STATUS_COPY[status as keyof typeof STATUS_COPY] ?? 'Ready'}
                 tone={status === 'error' ? 'danger' : isStreaming ? 'info' : 'success'}
@@ -305,7 +308,8 @@ export function ChatView({
 
       <div
         ref={viewportRef}
-        className="flex-1 overflow-y-auto px-6 py-5"
+        data-testid="chat-scrollport"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5"
         onScroll={(event) => {
           const target = event.currentTarget;
           const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -320,11 +324,11 @@ export function ChatView({
             showReasoningMetadata={showReasoningMetadata}
           />
         ) : localConversationId && conversationMessages.isLoading ? (
-          <div className="flex h-full min-h-[22rem] items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center text-sm text-[color:var(--text-muted)]">
+          <div className="flex h-full min-h-[18rem] items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-6 text-center text-sm text-[color:var(--text-muted)] sm:min-h-[22rem] sm:p-10">
             Loading saved transcript…
           </div>
         ) : (
-          <div className="flex h-full min-h-[22rem] flex-col items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-10 text-center">
+          <div className="flex h-full min-h-[18rem] flex-col items-center justify-center rounded-[2rem] border border-dashed border-[color:var(--border-strong)] bg-[color:var(--panel-subtle)] p-6 text-center sm:min-h-[22rem] sm:p-10">
             <span className="rounded-full border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] p-4 text-[color:var(--text-muted)]">
               <Bot className="h-6 w-6" />
             </span>
@@ -336,7 +340,7 @@ export function ChatView({
         )}
       </div>
 
-      <div className="border-t border-[color:var(--border-soft)] px-6 py-5">
+      <div data-testid="chat-composer-bar" className="shrink-0 border-t border-[color:var(--border-soft)] px-4 py-4 sm:px-6 sm:py-5">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {latestAssistant?.metadata?.activeAgentName ?? latestAssistant?.metadata?.agent ? (
             <StatusBadge label={latestAssistant?.metadata?.activeAgentName ?? latestAssistant?.metadata?.agent ?? 'Assistant'} tone="success" />

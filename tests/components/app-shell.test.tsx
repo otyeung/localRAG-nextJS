@@ -121,4 +121,24 @@ describe('AppShell health states', () => {
 
     expect(screen.getAllByText('Health unavailable').length).toBeGreaterThan(0);
   });
+
+  it('keeps the chat workspace from stretching to the side panels on wide screens', () => {
+    useHealthMock.mockReturnValue({
+      data: {
+        status: 'healthy',
+        label: 'Healthy',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<AppShell />);
+
+    const chatWorkspace = screen.getByRole('main', { name: 'Chat workspace' });
+    expect(chatWorkspace).toHaveClass('order-1', 'min-w-0', 'xl:order-2', 'xl:sticky', 'xl:top-4', 'xl:self-start');
+    expect(screen.getByTestId('sidebar-panel')).toHaveClass('order-2', 'min-w-0', 'xl:order-1');
+    expect(screen.getByTestId('knowledge-panel')).toHaveClass('order-3', 'min-w-0');
+    expect(chatWorkspace.parentElement).toHaveClass('items-start');
+  });
 });

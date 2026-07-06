@@ -122,35 +122,37 @@ export function AppShell() {
           </div>
         </header>
 
-        <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_420px]">
-          <Sidebar
-            conversations={conversations.conversations}
-            totalConversations={conversations.totalConversations}
-            hasMoreConversations={Boolean(conversations.hasNextPage)}
-            onLoadMoreConversations={() => {
-              void conversations.fetchNextPage();
-            }}
-            isLoadingMoreConversations={conversations.isFetchingNextPage}
-            isLoadingConversations={conversations.isLoading}
-            conversationsError={conversations.error?.message ?? null}
-            activeConversationId={activeConversationId}
-            conversationSearchValue={conversationSearch}
-            onConversationSearchChange={setConversationSearch}
-            onConversationSelect={setActiveConversationId}
-            onNewChat={handleNewChat}
-            onConversationRename={handleConversationRename}
-            onConversationDelete={handleConversationDelete}
-            onKnowledgeBase={() => setPanel('knowledge')}
-            onSettings={() => setPanel('settings')}
-            healthLabel={healthLabel}
-            healthTone={healthTone}
-          />
+        <div className="grid items-start gap-4 xl:grid-cols-[320px_minmax(0,1fr)_420px]">
+          <div data-testid="sidebar-panel" className="order-2 min-w-0 xl:order-1">
+            <Sidebar
+              conversations={conversations.conversations}
+              totalConversations={conversations.totalConversations}
+              hasMoreConversations={Boolean(conversations.hasNextPage)}
+              onLoadMoreConversations={() => {
+                void conversations.fetchNextPage();
+              }}
+              isLoadingMoreConversations={conversations.isFetchingNextPage}
+              isLoadingConversations={conversations.isLoading}
+              conversationsError={conversations.error?.message ?? null}
+              activeConversationId={activeConversationId}
+              conversationSearchValue={conversationSearch}
+              onConversationSearchChange={setConversationSearch}
+              onConversationSelect={setActiveConversationId}
+              onNewChat={handleNewChat}
+              onConversationRename={handleConversationRename}
+              onConversationDelete={handleConversationDelete}
+              onKnowledgeBase={() => setPanel('knowledge')}
+              onSettings={() => setPanel('settings')}
+              healthLabel={healthLabel}
+              healthTone={healthTone}
+            />
+          </div>
 
-          <main aria-label="Chat workspace" className="min-w-0">
+          <main aria-label="Chat workspace" className="order-1 min-w-0 xl:order-2 xl:sticky xl:top-4 xl:self-start">
             <ChatView initialConversationId={activeConversationId} onConversationResolved={setActiveConversationId} />
           </main>
 
-          <aside className="space-y-4">
+          <aside data-testid="knowledge-panel" className="order-3 min-w-0 space-y-4">
             {panel === 'knowledge' ? (
               <>
                 <UploadDropzone

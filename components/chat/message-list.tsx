@@ -15,6 +15,7 @@ type ChatMessage = UIMessage<{
 }>;
 
 type ToolPart = Extract<ChatMessage['parts'][number], { type: `tool-${string}` | 'dynamic-tool' }>;
+type SourcePart = Extract<ChatMessage['parts'][number], { type: 'source-url' | 'source-document' }>;
 
 function getTextContent(message: ChatMessage): string {
   return message.parts
@@ -31,9 +32,33 @@ function getReasoningParts(message: ChatMessage) {
 
 function getSourceParts(message: ChatMessage) {
   return message.parts.filter(
-    (part): part is Extract<ChatMessage['parts'][number], { type: 'source-url' | 'source-document' }> =>
-      part.type === 'source-url' || part.type === 'source-document',
+    (part): part is SourcePart => part.type === 'source-url' || part.type === 'source-document',
   );
+}
+
+function getSourceRenderKey(source: SourcePart) {
+  const title = 'title' in source && typeof source.title === 'string' ? source.title : '';
+  const url = 'url' in source && typeof source.url === 'string' ? source.url : '';
+  const mediaType = 'mediaType' in source && typeof source.mediaType === 'string' ? source.mediaType : '';
+
+  return [source.type, source.sourceId, title, url, mediaType].join('\u001f');
+}
+
+function getUniqueSourceParts(message: ChatMessage) {
+  const uniqueSources: Array<{ key: string; source: SourcePart }> = [];
+  const seen = new Set<string>();
+
+  for (const source of getSourceParts(message)) {
+    const key = getSourceRenderKey(source);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    uniqueSources.push({ key, source });
+  }
+
+  return uniqueSources;
 }
 
 function getToolParts(message: ChatMessage) {
@@ -91,7 +116,7 @@ export function MessageList({
       {messages.map((message) => {
         const content = getTextContent(message);
         const reasoningParts = getReasoningParts(message);
-        const sources = getSourceParts(message);
+        const sources = getUniqueSourceParts(message);
         const toolParts = getToolParts(message);
         const isAssistant = message.role === 'assistant';
         const timestamp = message.metadata?.createdAt
@@ -198,9 +223,9 @@ export function MessageList({
                   Citations
                 </p>
                 <div className="space-y-2">
-                  {sources.map((source) => (
+                  {sources.map(({ key, source }) => (
                     <div
-                      key={source.sourceId}
+                      key={key}
                       data-testid="citation-item"
                       className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--panel-elevated)] px-4 py-3"
                     >

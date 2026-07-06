@@ -102,7 +102,7 @@ export function Sidebar({
   }, [conversations, searchValue]);
 
   return (
-    <aside className="glass-panel flex h-full flex-col gap-5 p-5">
+    <aside className="glass-panel flex h-full min-w-0 flex-col gap-5 p-5">
       <div className="space-y-4">
         <div className="flex items-start justify-between gap-3">
           <div>

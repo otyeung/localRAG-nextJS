@@ -96,6 +96,22 @@ describe('ChatView', () => {
     expect(screen.getAllByRole('button', { name: 'Retry response' }).length).toBeGreaterThan(0);
   });
 
+  it('keeps responses and the composer inside a viewport-bounded mobile chat shell', () => {
+    render(createElement(ChatView, { initialConversationId: 'conversation_1' }));
+
+    expect(screen.getByTestId('chat-shell')).toHaveClass(
+      'h-[calc(100svh-1rem)]',
+      'max-h-[calc(100svh-1rem)]',
+      'xl:h-[calc(100vh-9rem)]',
+    );
+    expect(screen.getByTestId('chat-scrollport')).toHaveClass(
+      'min-h-0',
+      'overflow-y-auto',
+      'overscroll-contain',
+    );
+    expect(screen.getByTestId('chat-composer-bar')).toHaveClass('shrink-0');
+  });
+
   it('disables retry latest response when no transcript is available', () => {
     useChatMock.mockReturnValue({
       messages: [],
