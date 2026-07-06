@@ -25,19 +25,14 @@ Business-wise, the app proves the core enterprise RAG loop end to end: confident
 
 The local Compose project runs the following services:
 
-| Service | Image / build | Published port | Role |
-| --- | --- | --- | --- |
-| `nextjs` | Local `Dockerfile` build (`localrag-nextjs-nextjs`) | `3000:3000` | Next.js development server, API routes, Prisma migrations on startup, chat UI, upload handling, ingestion callback persistence, and fleet health endpoint. |
-| `postgres` | `postgres:16.8-alpine` | `5432:5432` | Shared PostgreSQL instance. Prisma uses the `app` schema for application data; n8n stores its workflow tables separately in the same database. |
-| `qdrant` | `qdrant/qdrant:v1.13.6` | Internal only | Vector database for document chunks and retrieval payloads. |
-| `qdrant-init` | `node:22.18.0-alpine` | Internal only | Bootstrap sidecar that ensures the configured Qdrant collection exists and stays healthy so dependent services can wait on it. |
-| `redis` | `redis:7.4.5-alpine` | Internal only | Redis runtime for rate-limiting state and fleet health checks. |
-| `n8n` | `n8nio/n8n:1.103.2` | `127.0.0.1:5678:5678` | Internal workflow runner for ingestion and retrieval; imports/activates committed workflows, calls OpenAI-compatible embedding APIs, writes Qdrant points, and posts ingestion completion back to Next.js. |
-
-## Architectural References
-
-- OpenAI Agents + AI SDK UI example: <https://github.com/openai/openai-agents-js/tree/main/examples/ai-sdk-ui>
-- n8n + local RAG reference: <https://github.com/otyeung/localRAG>
+| Service       | Image / build                                       | Published port        | Role                                                                                                                                                                                                       |
+| ------------- | --------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nextjs`      | Local `Dockerfile` build (`localrag-nextjs-nextjs`) | `3000:3000`           | Next.js development server, API routes, Prisma migrations on startup, chat UI, upload handling, ingestion callback persistence, and fleet health endpoint.                                                 |
+| `postgres`    | `postgres:16.8-alpine`                              | `5432:5432`           | Shared PostgreSQL instance. Prisma uses the `app` schema for application data; n8n stores its workflow tables separately in the same database.                                                             |
+| `qdrant`      | `qdrant/qdrant:v1.13.6`                             | Internal only         | Vector database for document chunks and retrieval payloads.                                                                                                                                                |
+| `qdrant-init` | `node:22.18.0-alpine`                               | Internal only         | Bootstrap sidecar that ensures the configured Qdrant collection exists and stays healthy so dependent services can wait on it.                                                                             |
+| `redis`       | `redis:7.4.5-alpine`                                | Internal only         | Redis runtime for rate-limiting state and fleet health checks.                                                                                                                                             |
+| `n8n`         | `n8nio/n8n:1.103.2`                                 | `127.0.0.1:5678:5678` | Internal workflow runner for ingestion and retrieval; imports/activates committed workflows, calls OpenAI-compatible embedding APIs, writes Qdrant points, and posts ingestion completion back to Next.js. |
 
 ## Architecture
 
@@ -57,7 +52,7 @@ graph TD
     N8N -->|Upsert and search vectors| Qdrant[(Qdrant Collection)]
     N8N -->|POST /api/ingestion/callback| Next
     Next -->|Persist chunks, embeddings, workflow state| PG
-    Next -->|Fleet and app health| Health[/api/health and /api/health/fleet]
+    Next -->|Fleet and app health| Health["Health API endpoints"]
     QInit[qdrant-init Sidecar] -->|Ensure collection| Qdrant
     Compose[Docker Compose Network] -.-> Next
     Compose -.-> PG
@@ -279,38 +274,38 @@ Runtime variables are documented in `.env.example`:
 
 ### `.env.example` explained
 
-| Variable | Example value | What it controls |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | `replace-with-openai-api-key-or-local-placeholder` | API key for hosted OpenAI or an OpenAI-compatible runtime. A placeholder is acceptable for local Ollama-style endpoints that do not enforce auth. |
-| `OPENAI_API_URL` | `http://localhost:11434` | Base URL for the chat and embedding provider. The local example points to Ollama; hosted OpenAI should use `https://api.openai.com/v1`. |
-| `OPENAI_MODEL` | `llama3.2` | Chat/completion model used by agents to generate final answers. |
-| `OPENAI_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used by n8n ingestion and retrieval workflows. |
-| `DATABASE_URL` | `postgresql://.../localrag_nextjs?schema=app` | Prisma connection string for Next.js app data in the `app` schema. |
-| `N8N_BASE_URL` | `http://n8n:5678` | Internal URL Next.js uses to call n8n webhooks and optional REST API endpoints. |
-| `N8N_API_KEY` | `replace-with-admin-provisioned-n8n-api-key-or-leave-empty` | Optional n8n REST API key. Required only for API-backed workflow listing/polling, corpus seed polling, and live validation. |
-| `N8N_WEBHOOK_SECRET` | `change-me-n8n-webhook-secret` | Shared secret for internal Next.js-to-n8n and n8n-to-Next.js webhook calls. |
-| `LOCALRAG_APP_URL` | `http://nextjs:3000` | Internal URL n8n uses to call `POST /api/ingestion/callback` after indexing completes. |
-| `N8N_TIMEOUT`, `N8N_RETRY_COUNT`, `N8N_RETRY_DELAY` | `30000`, `3`, `500` | Timeout and retry behavior for n8n client calls. |
-| `LOG_LEVEL` | `info` | Server log verbosity. |
-| `MAX_UPLOAD_SIZE` | `52428800` | Maximum upload size in bytes. |
-| `TEMP_UPLOAD_DIRECTORY` | `/tmp/localrag-nextjs/uploads` | Writable temporary upload storage for host-run mode. Compose overrides this to `/data/uploads`. |
-| `QDRANT_URL` | `http://qdrant:6333` | Internal Qdrant URL for vector collection bootstrap and health checks. |
-| `QDRANT_COLLECTION` | `documents` | Qdrant collection for document vectors. |
-| `QDRANT_VECTOR_SIZE` | `768` | Vector dimensions. Must match `OPENAI_EMBEDDING_MODEL`. |
-| `QDRANT_DISTANCE` | `Cosine` | Qdrant vector distance metric. |
-| `ANONYMOUS_COOKIE_SECRET` | `change-me-anonymous-cookie-secret` | HMAC secret for anonymous user cookies. |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `app`, `app_password`, `localrag_nextjs` | Compose PostgreSQL bootstrap credentials and database name. |
-| `N8N_ENCRYPTION_KEY`, `N8N_USER_MANAGEMENT_JWT_SECRET` | `change-me-...` | n8n runtime secrets. |
-| `REDIS_URL` | `redis://redis:6379` | Redis connection string for rate limiting and health checks. |
+| Variable                                               | Example value                                               | What it controls                                                                                                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`                                       | `replace-with-openai-api-key-or-local-placeholder`          | API key for hosted OpenAI or an OpenAI-compatible runtime. A placeholder is acceptable for local Ollama-style endpoints that do not enforce auth. |
+| `OPENAI_API_URL`                                       | `http://localhost:11434`                                    | Base URL for the chat and embedding provider. The local example points to Ollama; hosted OpenAI should use `https://api.openai.com/v1`.           |
+| `OPENAI_MODEL`                                         | `llama3.2`                                                  | Chat/completion model used by agents to generate final answers.                                                                                   |
+| `OPENAI_EMBEDDING_MODEL`                               | `nomic-embed-text`                                          | Embedding model used by n8n ingestion and retrieval workflows.                                                                                    |
+| `DATABASE_URL`                                         | `postgresql://.../localrag_nextjs?schema=app`               | Prisma connection string for Next.js app data in the `app` schema.                                                                                |
+| `N8N_BASE_URL`                                         | `http://n8n:5678`                                           | Internal URL Next.js uses to call n8n webhooks and optional REST API endpoints.                                                                   |
+| `N8N_API_KEY`                                          | `replace-with-admin-provisioned-n8n-api-key-or-leave-empty` | Optional n8n REST API key. Required only for API-backed workflow listing/polling, corpus seed polling, and live validation.                       |
+| `N8N_WEBHOOK_SECRET`                                   | `change-me-n8n-webhook-secret`                              | Shared secret for internal Next.js-to-n8n and n8n-to-Next.js webhook calls.                                                                       |
+| `LOCALRAG_APP_URL`                                     | `http://nextjs:3000`                                        | Internal URL n8n uses to call `POST /api/ingestion/callback` after indexing completes.                                                            |
+| `N8N_TIMEOUT`, `N8N_RETRY_COUNT`, `N8N_RETRY_DELAY`    | `30000`, `3`, `500`                                         | Timeout and retry behavior for n8n client calls.                                                                                                  |
+| `LOG_LEVEL`                                            | `info`                                                      | Server log verbosity.                                                                                                                             |
+| `MAX_UPLOAD_SIZE`                                      | `52428800`                                                  | Maximum upload size in bytes.                                                                                                                     |
+| `TEMP_UPLOAD_DIRECTORY`                                | `/tmp/localrag-nextjs/uploads`                              | Writable temporary upload storage for host-run mode. Compose overrides this to `/data/uploads`.                                                   |
+| `QDRANT_URL`                                           | `http://qdrant:6333`                                        | Internal Qdrant URL for vector collection bootstrap and health checks.                                                                            |
+| `QDRANT_COLLECTION`                                    | `documents`                                                 | Qdrant collection for document vectors.                                                                                                           |
+| `QDRANT_VECTOR_SIZE`                                   | `768`                                                       | Vector dimensions. Must match `OPENAI_EMBEDDING_MODEL`.                                                                                           |
+| `QDRANT_DISTANCE`                                      | `Cosine`                                                    | Qdrant vector distance metric.                                                                                                                    |
+| `ANONYMOUS_COOKIE_SECRET`                              | `change-me-anonymous-cookie-secret`                         | HMAC secret for anonymous user cookies.                                                                                                           |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`    | `app`, `app_password`, `localrag_nextjs`                    | Compose PostgreSQL bootstrap credentials and database name.                                                                                       |
+| `N8N_ENCRYPTION_KEY`, `N8N_USER_MANAGEMENT_JWT_SECRET` | `change-me-...`                                             | n8n runtime secrets.                                                                                                                              |
+| `REDIS_URL`                                            | `redis://redis:6379`                                        | Redis connection string for rate limiting and health checks.                                                                                      |
 
 ### Production model replacements
 
 For production, replace local Ollama models with managed cloud models for better reliability, scalability, monitoring, and operational support.
 
-| Local POC model | Production cloud model option | Purpose |
-| --- | --- | --- |
+| Local POC model    | Production cloud model option                        | Purpose                                                                                                                           |
+| ------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `nomic-embed-text` | `text-embedding-3-small` or `text-embedding-3-large` | Generate embeddings for documents and user queries. Update `QDRANT_VECTOR_SIZE` to match the selected embedding model dimensions. |
-| `llama3.2` | `gpt-4o-mini` or `gpt-4o` | Generate final answers from retrieved context. |
+| `llama3.2`         | `gpt-4o-mini` or `gpt-4o`                            | Generate final answers from retrieved context.                                                                                    |
 
 Production deployments should also replace all placeholder secrets in `.env.example`, use managed PostgreSQL/Redis/vector infrastructure or hardened equivalents, set `OPENAI_API_URL=https://api.openai.com/v1` for hosted OpenAI, provision `N8N_API_KEY` if workflow polling/live validation is required, and keep Qdrant collection dimensions aligned with the embedding model.
 
@@ -342,10 +337,10 @@ The seed flow is idempotent by file hash, writes uploads/documents/workflow reco
 
 Use these questions to validate grounded retrieval after ingestion:
 
-| Corpus | Test question |
-| --- | --- |
-| `1706.03762v7.pdf` | What specific hardware setup and optimizer were used to train the base and big Transformer models? Additionally, how long did the training take for each model, and what were their final BLEU scores on the WMT 2014 English-to-German dataset? |
-| `cymbal-starlight-2024.pdf` | What is the cargo capacity of Cymbal Starlight? |
+| Corpus                      | Test question                                                                                                                                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `1706.03762v7.pdf`          | What specific hardware setup and optimizer were used to train the base and big Transformer models? Additionally, how long did the training take for each model, and what were their final BLEU scores on the WMT 2014 English-to-German dataset? |
+| `cymbal-starlight-2024.pdf` | What is the cargo capacity of Cymbal Starlight?                                                                                                                                                                                                  |
 
 Expected validation outcome: answers should be grounded in retrieved chunks, stream back through chat, and include citations pointing to the relevant document metadata.
 
