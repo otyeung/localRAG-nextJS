@@ -11,8 +11,8 @@ class PrismaClientMock {
 }
 
 class PrismaPgMock {
-  constructor(options: unknown) {
-    prismaPgCalls(options);
+  constructor(options: unknown, adapterOptions?: unknown) {
+    prismaPgCalls(options, adapterOptions);
     return { __tag: 'adapter' } as object;
   }
 }
@@ -40,14 +40,23 @@ describe('prisma client singleton', () => {
   });
 
   it('configures PrismaClient with a pg adapter and development logging', async () => {
-    vi.stubEnv('DATABASE_URL', 'postgresql://localhost:5432/localrag_nextjs');
+    vi.stubEnv(
+      'DATABASE_URL',
+      'postgresql://localhost:5432/localrag_nextjs?schema=app',
+    );
     vi.stubEnv('NODE_ENV', 'development');
 
     const { prisma } = await import('@/lib/db/prisma');
 
-    expect(prismaPgCalls).toHaveBeenCalledWith({
-      connectionString: 'postgresql://localhost:5432/localrag_nextjs',
-    });
+    expect(prismaPgCalls).toHaveBeenCalledWith(
+      {
+        connectionString:
+          'postgresql://localhost:5432/localrag_nextjs?schema=app',
+      },
+      {
+        schema: 'app',
+      },
+    );
     expect(prismaClientCalls).toHaveBeenCalledWith({
       adapter: { __tag: 'adapter' },
       log: ['query', 'warn', 'error'],

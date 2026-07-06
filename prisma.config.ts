@@ -5,6 +5,6 @@ export default defineConfig({
   datasource: {
     url:
       process.env.DATABASE_URL ??
-      'postgresql://app:app_password@localhost:5432/localrag_nextjs?schema=public',
+      'postgresql://app:app_password@localhost:5432/localrag_nextjs?schema=app',
   },
 });

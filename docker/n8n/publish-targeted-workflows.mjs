@@ -43,11 +43,13 @@ async function loadWorkflowEntries(inputDir) {
         }
 
         if (!allowedWorkflowNames.has(workflow.name)) {
-          fail(`Refusing to publish unexpected workflow "${workflow.name}" from ${fileName}.`);
+          fail(
+            `Refusing to activate unexpected workflow "${workflow.name}" from ${fileName}.`,
+          );
         }
 
         if (typeof workflow.id !== 'string' || !workflow.id.trim()) {
-          fail(`Workflow file ${fileName} is missing a publishable id.`);
+          fail(`Workflow file ${fileName} is missing an activatable id.`);
         }
 
         return {
@@ -59,29 +61,39 @@ async function loadWorkflowEntries(inputDir) {
   );
 }
 
-function publishWorkflow(workflow) {
-  const result = spawnSync('n8n', ['publish:workflow', '--id', workflow.id], {
-    stdio: 'inherit',
-    env: process.env,
-  });
+function activateWorkflow(workflow) {
+  const result = spawnSync(
+    'n8n',
+    ['update:workflow', '--id', workflow.id, '--active=true'],
+    {
+      stdio: 'inherit',
+      env: process.env,
+    },
+  );
 
   if (result.error) {
     throw result.error;
   }
 
   if (result.status !== 0) {
-    fail(`Failed to publish workflow "${workflow.name}" from ${workflow.fileName}.`);
+    fail(
+      `Failed to activate workflow "${workflow.name}" from ${workflow.fileName}.`,
+    );
   }
 }
 
 const { input } = parseArgs(process.argv);
 const workflows = await loadWorkflowEntries(input);
-const orderedWorkflows = workflows.sort((left, right) => left.name.localeCompare(right.name));
+const orderedWorkflows = workflows.sort((left, right) =>
+  left.name.localeCompare(right.name),
+);
 
 if (orderedWorkflows.length !== allowedWorkflowNames.size) {
-  fail(`Expected ${allowedWorkflowNames.size} target workflow files but found ${orderedWorkflows.length}.`);
+  fail(
+    `Expected ${allowedWorkflowNames.size} target workflow files but found ${orderedWorkflows.length}.`,
+  );
 }
 
 for (const workflow of orderedWorkflows) {
-  publishWorkflow(workflow);
+  activateWorkflow(workflow);
 }

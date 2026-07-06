@@ -13,6 +13,10 @@ import {
 
 export const N8N_DOCUMENT_INGESTION_WORKFLOW_KEY = 'ingestion';
 export const N8N_RETRIEVAL_WORKFLOW_KEY = 'retrieval';
+export const N8N_DOCUMENT_INGESTION_WEBHOOK_PATH =
+  'workflow-ingestion/webhook%2520ingestion/ingestion';
+export const N8N_RETRIEVAL_WEBHOOK_PATH =
+  'workflow-retrieval/webhook%2520retrieval/retrieval';
 
 export type StartWorkflowInput = {
   workflowKey: string;
@@ -54,7 +58,9 @@ export class N8nWorkflowService {
     return workflows;
   }
 
-  async startWorkflow(input: StartWorkflowInput): Promise<N8nWorkflowStartResult> {
+  async startWorkflow(
+    input: StartWorkflowInput,
+  ): Promise<N8nWorkflowStartResult> {
     const entrypointPath = input.entrypointPath ?? input.workflowKey;
 
     try {
@@ -69,7 +75,10 @@ export class N8nWorkflowService {
         throw error;
       }
 
-      throw toN8nError(error, `Unable to start n8n workflow "${input.workflowKey}".`);
+      throw toN8nError(
+        error,
+        `Unable to start n8n workflow "${input.workflowKey}".`,
+      );
     }
   }
 }

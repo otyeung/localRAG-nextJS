@@ -2,8 +2,14 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import {
+  DEFAULT_OPENAI_API_URL,
+  isHostedOpenAiApiUrl,
+} from '@/lib/openai/api-url';
+
 const rawEnvSchema = z.object({
-  OPENAI_API_KEY: z.string().min(1),
+  OPENAI_API_KEY: z.string().trim().optional().default(''),
+  OPENAI_API_URL: z.string().url().default(DEFAULT_OPENAI_API_URL),
   OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),
   OPENAI_EMBEDDING_MODEL: z.string().min(1).default('text-embedding-3-small'),
   DATABASE_URL: z.string().url(),
@@ -17,19 +23,27 @@ const rawEnvSchema = z.object({
   N8N_TIMEOUT: z.coerce.number().int().positive().default(30_000),
   N8N_RETRY_COUNT: z.coerce.number().int().min(0).max(10).default(3),
   N8N_RETRY_DELAY: z.coerce.number().int().positive().default(500),
-  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  LOG_LEVEL: z
+    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
+    .default('info'),
   MAX_UPLOAD_SIZE: z.coerce.number().int().positive().default(52_428_800),
-  TEMP_UPLOAD_DIRECTORY: z.string().min(1).default('/tmp/localrag-nextjs/uploads'),
+  TEMP_UPLOAD_DIRECTORY: z
+    .string()
+    .min(1)
+    .default('/tmp/localrag-nextjs/uploads'),
   QDRANT_URL: z.string().url(),
   QDRANT_COLLECTION: z.string().min(1).default('documents'),
   QDRANT_VECTOR_SIZE: z.coerce.number().int().positive().default(1_536),
-  QDRANT_DISTANCE: z.enum(['Cosine', 'Dot', 'Euclid', 'Manhattan']).default('Cosine'),
+  QDRANT_DISTANCE: z
+    .enum(['Cosine', 'Dot', 'Euclid', 'Manhattan'])
+    .default('Cosine'),
   ANONYMOUS_COOKIE_SECRET: z.string().min(1),
 });
 
 export type AppEnv = {
   openai: {
     apiKey: string;
+    apiUrl: string;
     model: string;
     embeddingModel: string;
   };
@@ -66,10 +80,16 @@ export type EnvSource = Record<string, string | undefined>;
 
 export function createEnv(source: EnvSource): AppEnv {
   const parsed = rawEnvSchema.parse(source);
+  if (isHostedOpenAiApiUrl(parsed.OPENAI_API_URL) && !parsed.OPENAI_API_KEY) {
+    throw new Error(
+      'OPENAI_API_KEY is required when OPENAI_API_URL points to the hosted OpenAI API.',
+    );
+  }
 
   return {
     openai: {
-      apiKey: parsed.OPENAI_API_KEY,
+      apiKey: parsed.OPENAI_API_KEY || 'local-openai-compatible-placeholder',
+      apiUrl: parsed.OPENAI_API_URL.replace(/\/$/, ''),
       model: parsed.OPENAI_MODEL,
       embeddingModel: parsed.OPENAI_EMBEDDING_MODEL,
     },
@@ -105,6 +125,7 @@ export function createEnv(source: EnvSource): AppEnv {
 
 const testEnvDefaults: EnvSource = {
   OPENAI_API_KEY: 'test-openai-key',
+  OPENAI_API_URL: DEFAULT_OPENAI_API_URL,
   OPENAI_MODEL: 'gpt-4.1-mini',
   OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
   DATABASE_URL: 'postgresql://localhost:5432/db',
@@ -124,6 +145,9 @@ const testEnvDefaults: EnvSource = {
   ANONYMOUS_COOKIE_SECRET: 'localrag-nextjs-test-anonymous-cookie-secret',
 };
 
-const envSource = process.env.NODE_ENV === 'test' ? { ...testEnvDefaults, ...process.env } : process.env;
+const envSource =
+  process.env.NODE_ENV === 'test'
+    ? { ...testEnvDefaults, ...process.env }
+    : process.env;
 
 export const env = createEnv(envSource);
