@@ -157,6 +157,6 @@ describe('Sidebar', () => {
       }),
     );
 
-    expect(screen.getByText('Health unavailable').closest('span')).toHaveClass('text-rose-200');
+    expect(screen.getByText('Health unavailable').parentElement).toHaveClass('text-rose-200');
   });
 });
