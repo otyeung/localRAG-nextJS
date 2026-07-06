@@ -11,4 +11,4 @@ test-results
 .env.test.local
 .env.production.local
 .superpowers/
-./docs/
+docs/

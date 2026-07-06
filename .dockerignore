@@ -10,3 +10,4 @@ pnpm-debug.log
 tests
 vitest.config.ts
 playwright.config.ts
+docs/
